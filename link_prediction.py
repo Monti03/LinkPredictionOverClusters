@@ -16,7 +16,7 @@ from sklearn import metrics
 import matplotlib.pyplot as plt
 
 from constants import *
-from data import load_data, get_test_edges
+from data import load_data, get_test_edges, get_false_edges, sparse_to_tuple
 from metrics import clustering_metrics
 from model import MyModel    
 from loss import total_loss
@@ -245,28 +245,42 @@ if __name__ == "__main__":
 
     adjs = data[0]
     features_ = data[1] 
+    tests = data[2]
+    valids = data[3]
+
+    n_test_edges = []
+    n_valid_edges = []
 
     test_aps = []
     test_aucs = []
 
     subset_lenghts = []
-    n_total_edges = []
+
     for clust in range(len(adjs.keys())):
         print("\n")
-        complete_adj = adjs[clust]
+        #complete_adj = adjs[clust]
 
-        n_total_edges.append(complete_adj.count_nonzero())
+        adj_train = adjs[clust]
 
-        train_split = None
+        train_edges, _, _ = sparse_to_tuple(adj_train)
+        test_edges, _, _ = sparse_to_tuple(tests[clust])
+        valid_edges, _, _ = sparse_to_tuple(valids[clust])
+        
+        n_test_edges.append(test_edges.shape[0])
+        n_valid_edges.append(valid_edges.shape[0])
 
-        train_split = get_test_edges(complete_adj, test_size=0.1, train_size=0.1)
+        false_edges = get_false_edges(adj_train, test_edges.shape[0] + valid_edges.shape[0])
+        valid_false_edges = false_edges[:valid_edges.shape[0]]
+        test_false_edges = false_edges[valid_edges.shape[0]:]
 
-        adj_train_triu, train_edges, valid_edges, valid_false_edges, test_edges, test_false_edges = train_split
+        """ train_split = get_test_edges(complete_adj, test_size=0.1, train_size=0.1)
+
+        adj_train_triu, train_edges, valid_edges, valid_false_edges, test_edges, test_false_edges = train_split """
 
         subset_lenghts.append((len(valid_edges), len(valid_false_edges), len(test_edges), len(test_false_edges)))
 
         # since get_test_edges returns a triu, we sum to its transpose 
-        adj_train = adj_train_triu + adj_train_triu.T
+        adj_train = adj_train + adj_train.T
 
         # get normalized adj
         adj_train_norm = compute_adj_norm(adj_train)
@@ -288,3 +302,6 @@ if __name__ == "__main__":
 
     print(f"test ap: {test_aps}")
     print(f"test auc: {test_aucs}")
+    print()
+    print(f"n_test_edges: {n_test_edges}")
+    print(f"n_valid_edges: {n_valid_edges}")

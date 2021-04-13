@@ -17,7 +17,7 @@ def get_false_edges(adj, n):
         if(adj[r1, r2] == 0 and r1<r2):
             false_edges.append([r1,r2])
             
-    return false_edges
+    return np.array(false_edges)
 
 # sparse matrix to (coords of the edges, values of the edges, shape of the matrix)
 def sparse_to_tuple(sparse_mx):
@@ -88,10 +88,29 @@ def load_data(dataset_name):
     else:
         raise NotImplementedError
 
+def load_edges(file_name):
+    with open(file_name) as fin:
+        edges = []
+        for line in fin:
+            edges.append(line.split(','))
+    edges = np.array(edges)
+    return edges
+
 def load_pubmed_data():
     data = sio.loadmat('pubmed/pubmed.mat')
     adj_complete = data['W'].toarray()
     
+    res_edges = load_edges("pubmed/res_edges.csv")
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_complete.shape)
+    
+    test_edges = load_edges("pubmed/test_edges.csv")
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_complete.shape)
+    
+    valid_edges = load_edges("pubmed/train_edges.csv")
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_complete.shape)
+
+    adj_complete = adj_complete.toarray()
+
     # some values have a self loop, I remove it
     for i in range(adj_complete.shape[0]):
         adj_complete[i,i] = 0
@@ -109,8 +128,24 @@ def load_pubmed_data():
         tmp_adj = adj_complete[clust_to_node[key],:]
         tmp_adj = tmp_adj[:,clust_to_node[key]]
         clust_to_adj[key] = sp.csr_matrix(tmp_adj)
-
+    
     adj_complete = None
+    
+    test_matrix = test_matrix.toarray()
+    clust_to_test = {}
+    for key in clust_to_node.keys():
+        tmp_adj = test_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]        
+        clust_to_test[key] = sp.csr_matrix(tmp_adj)
+    test_matrix = None
+
+    valid_matrix = valid_matrix.toarray()
+    clust_to_valid = {}
+    for key in clust_to_node.keys():
+        tmp_adj = valid_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]
+        clust_to_valid[key] = sp.csr_matrix(tmp_adj)
+    valid_matrix = None
 
     all_features = data['fea']
     clust_to_features = {}
@@ -119,7 +154,7 @@ def load_pubmed_data():
         clust_to_features[key] = sp.csr_matrix(tmp_feat)
     
 
-    return clust_to_adj, clust_to_features
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid
     
 
 def load_pred_labels(dataset_name):
