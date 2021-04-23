@@ -169,26 +169,97 @@ def load_cora_data():
     pred_labels = load_pred_labels("CORA/cora2")
     
     adj_complete = np.loadtxt(open("CORA/W.csv", "rb"), delimiter=",")
+    adj_shape = adj_complete.shape
+
+    res_edges = load_edges("CORA/cora_res_edges.csv")
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
     
-    n_clusters = len(set(pred_labels))
+    test_edges = load_edges("CORA/cora_test_edges.csv")
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+    
+    valid_edges = load_edges("CORA/cora_train_edges.csv")
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+
+    adj_complete = adj_complete.toarray()
+
+    # some values have a self loop, I remove it
+    for i in range(adj_complete.shape[0]):
+        adj_complete[i,i] = 0
 
     clust_to_node = {}
-    for i, cluster in enumerate(pred_labels):
-        if(clust_to_node.get(int(cluster)) == None):
-            clust_to_node[int(cluster)] = []
-        clust_to_node[int(cluster)].append(i)        
+    node_to_clust = {}
+    with open("CORA/labels_cora.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            if(clust_to_node.get(clust) == None):
+                clust_to_node[clust] = []
+            clust_to_node[clust].append(i)
+
+            node_to_clust[i] = clust
 
     clust_to_adj = {}
     for key in clust_to_node.keys():
         tmp_adj = adj_complete[clust_to_node[key],:]
         tmp_adj = tmp_adj[:,clust_to_node[key]]
         clust_to_adj[key] = sp.csr_matrix(tmp_adj)
+    
+    adj_complete = None
+    
+    test_matrix = test_matrix.toarray()
+    clust_to_test = {}
+    for key in clust_to_node.keys():
+        tmp_adj = test_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]        
+        clust_to_test[key] = sp.csr_matrix(tmp_adj)
+    test_matrix = None
+
+    valid_matrix = valid_matrix.toarray()
+    clust_to_valid = {}
+    for key in clust_to_node.keys():
+        tmp_adj = valid_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]
+        clust_to_valid[key] = sp.csr_matrix(tmp_adj)
+    valid_matrix = None
 
     all_features = np.loadtxt(open("CORA/fea.csv", "rb"), delimiter=",")
-    
     clust_to_features = {}
     for key in clust_to_node.keys():
         tmp_feat = all_features[clust_to_node[key],:]
         clust_to_features[key] = sp.csr_matrix(tmp_feat)
+
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid 
+
+def get_complete_cora_data():
+        
+    adj_complete = np.loadtxt(open("CORA/W.csv", "rb"), delimiter=",")
+    adj_shape = adj_complete.shape
+
+    res_edges = load_edges("CORA/cora_res_edges.csv")
     
-    return clust_to_adj, clust_to_features
+    test_edges = load_edges("CORA/cora_test_edges.csv")
+    
+    valid_edges = load_edges("CORA/cora_train_edges.csv")
+    
+    node_to_clust = {}
+    with open("CORA/labels_cora.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            node_to_clust[i] = clust
+
+    
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
+    
+    all_features = np.loadtxt(open("CORA/fea.csv", "rb"), delimiter=",")
+    all_features = sp.csr_matrix(all_features)
+    
+    test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
+    test_edges = test_edges[test_edges_indeces]
+    
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+
+    valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
+    valid_edges = valid_edges[valid_edges_indeces]
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+
+    return adj_complete, all_features, test_matrix, valid_matrix 
+

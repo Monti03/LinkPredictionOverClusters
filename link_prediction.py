@@ -16,7 +16,7 @@ from sklearn import metrics
 import matplotlib.pyplot as plt
 
 from constants import *
-from data import load_data, get_test_edges, get_false_edges, sparse_to_tuple
+from data import load_data, get_test_edges, get_false_edges, sparse_to_tuple, get_complete_cora_data
 from metrics import clustering_metrics
 from model import MyModel    
 from loss import total_loss
@@ -299,6 +299,44 @@ if __name__ == "__main__":
         
         test_aps.append(test_ap)
         test_aucs.append(test_auc)
+    
+
+    clust = "complete"
+    adj_train, features, test_matrix, valid_matrix  = get_complete_cora_data()
+
+    train_edges, _, _ = sparse_to_tuple(adj_train)
+    test_edges, _, _ = sparse_to_tuple(test_matrix)
+    valid_edges, _, _ = sparse_to_tuple(valid_matrix)
+    
+    n_test_edges.append(test_edges.shape[0])
+    n_valid_edges.append(valid_edges.shape[0])
+
+    false_edges = get_false_edges(adj_train, test_edges.shape[0] + valid_edges.shape[0])
+    valid_false_edges = false_edges[:valid_edges.shape[0]]
+    test_false_edges = false_edges[valid_edges.shape[0]:]
+
+    subset_lenghts.append((len(valid_edges), len(valid_false_edges), len(test_edges), len(test_false_edges)))
+
+    # since get_test_edges returns a triu, we sum to its transpose 
+    adj_train = adj_train + adj_train.T
+
+    # get normalized adj
+    adj_train_norm = compute_adj_norm(adj_train)
+    
+    print(f"valid_edges: {valid_edges.shape[0]}")
+    print(f"valid_false_edges: {valid_false_edges.shape[0]}")
+
+    # start training
+    model = train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust)
+
+    model.save_weights(f"weights/{DATASET_NAME}_{clust}")
+
+    test_ap, test_auc = test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
+    
+    test_aps.append(test_ap)
+    test_aucs.append(test_auc)
+
+
 
     print(f"test ap: {test_aps}")
     print(f"test auc: {test_aucs}")

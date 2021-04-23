@@ -1,2 +1,2 @@
-model_checkpoint_path: "pubmed_2"
-all_model_checkpoint_paths: "pubmed_2"
+model_checkpoint_path: "cora_complete"
+all_model_checkpoint_paths: "cora_complete"
