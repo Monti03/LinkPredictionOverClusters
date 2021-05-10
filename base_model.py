@@ -13,10 +13,11 @@ class MyModel(tf.keras.Model):
         
         # the first layer is a sparse conv layer since the input tensor is sparse
         self.conv_1 = GraphSparseConvolution(adj_norm=adj_norm_tensor, output_size=CONV1_OUT_SIZE, dropout_rate=DROPOUT, act=tf.nn.relu)
+        self.conv_2 = GraphConvolution(adj_norm=adj_norm_tensor, output_size=CONV2_OUT_SIZE, dropout_rate=DROPOUT, act=lambda x: x)
         
         # the second and third conv layer share the same input
-        self.conv_mu = GraphConvolution(adj_norm=adj_norm_tensor, output_size=CONV_MU_OUT_SIZE, dropout_rate=DROPOUT, act=lambda x: x)
-        self.conv_logvar = GraphConvolution(adj_norm=adj_norm_tensor, output_size=CONV_VAR_OUT_SIZE, dropout_rate=DROPOUT, act=lambda x:x)
+        #self.conv_mu = GraphConvolution(adj_norm=adj_norm_tensor, output_size=CONV_MU_OUT_SIZE, dropout_rate=DROPOUT, act=lambda x: x)
+        #self.conv_logvar = GraphConvolution(adj_norm=adj_norm_tensor, output_size=CONV_VAR_OUT_SIZE, dropout_rate=DROPOUT, act=lambda x:x)
         
         
         # decoder
@@ -34,13 +35,15 @@ class MyModel(tf.keras.Model):
         # firsts convolutions
         x = self.conv_1(inputs, training)
         
-        self.mu = self.conv_mu(x, training)
-        self.logvar = self.conv_logvar(x, training) 
+        x = self.conv_2(x, training)
 
-        z = self.reparameterize(self.mu, self.logvar, training)
+        #self.mu = self.conv_mu(x, training)
+        #self.logvar = self.conv_logvar(x, training) 
+
+        #z = self.reparameterize(self.mu, self.logvar, training)
 
         # get the reconstruction of the adj
         # top = self.top_dec(z, training)
         # reshape to tensor of shape (n_nodes^2)
-        return z, self.mu, self.logvar
+        return x#, self.mu, self.logvar
     

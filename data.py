@@ -5,7 +5,7 @@ from scipy import sparse as sp
 import scipy.io as sio
 
 # get n random edges that have 0 value in adj
-def get_false_edges(adj, n):
+def get_false_edges(adj, n, node_to_clust=None):
     false_edges = []
 
     while len(false_edges) < n:
@@ -14,7 +14,7 @@ def get_false_edges(adj, n):
         
         # check that the edge is not present in the adj
         # and that is in the triu part
-        if(adj[r1, r2] == 0 and r1<r2):
+        if((node_to_clust is None or node_to_clust[r1] == node_to_clust[r2]) and adj[r1, r2] == 0 and r1<r2 ):
             false_edges.append([r1,r2])
             
     return np.array(false_edges)
@@ -114,7 +114,8 @@ def load_pubmed_data():
     # some values have a self loop, I remove it
     for i in range(adj_complete.shape[0]):
         adj_complete[i,i] = 0
-
+    
+    node_to_clust = {}
     clust_to_node = {}
     with open("pubmed/labels_pubmed.csv", "r") as fin:
         for i, line in enumerate(fin):
@@ -122,6 +123,8 @@ def load_pubmed_data():
             if(clust_to_node.get(clust) == None):
                 clust_to_node[clust] = []
             clust_to_node[clust].append(i)
+
+            node_to_clust[i] = clust
 
     clust_to_adj = {}
     for key in clust_to_node.keys():
@@ -154,7 +157,7 @@ def load_pubmed_data():
         clust_to_features[key] = sp.csr_matrix(tmp_feat)
     
 
-    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust
     
 
 def load_pred_labels(dataset_name):
@@ -188,7 +191,7 @@ def load_cora_data():
 
     clust_to_node = {}
     node_to_clust = {}
-    with open("CORA/labels_cora.csv", "r") as fin:
+    with open("CORA/labels_cora_2.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             if(clust_to_node.get(clust) == None):
@@ -227,7 +230,7 @@ def load_cora_data():
         tmp_feat = all_features[clust_to_node[key],:]
         clust_to_features[key] = sp.csr_matrix(tmp_feat)
 
-    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid 
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust
 
 def get_complete_cora_data():
         
@@ -261,5 +264,40 @@ def get_complete_cora_data():
     valid_edges = valid_edges[valid_edges_indeces]
     valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
 
+    return adj_complete, all_features, test_matrix, valid_matrix 
+
+def get_complete_pubmed_data():
+    
+    data = sio.loadmat('pubmed/pubmed.mat')
+    adj_complete = data['W'].toarray()
+
+    adj_shape = adj_complete.shape
+
+    res_edges = load_edges("pubmed/res_edges.csv")
+    
+    test_edges = load_edges("pubmed/test_edges.csv")
+    
+    valid_edges = load_edges("pubmed/train_edges.csv")
+    
+    node_to_clust = {}
+    with open("pubmed/labels_pubmed.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            node_to_clust[i] = clust
+
+    
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
+        
+    test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
+    test_edges = test_edges[test_edges_indeces]
+    
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+
+    valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
+    valid_edges = valid_edges[valid_edges_indeces]
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+    
+    all_features = sp.csr_matrix(data['fea'])
+    
     return adj_complete, all_features, test_matrix, valid_matrix 
 

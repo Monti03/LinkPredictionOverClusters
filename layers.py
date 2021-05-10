@@ -40,7 +40,7 @@ class GraphSparseConvolution(tf.keras.layers.Layer):
 
 # the only difference between these two classes is that the first will treat also the features as a sparse matrix (the adjacency matrix will always be sparse)
 class GraphConvolution(tf.keras.layers.Layer):
-    def __init__(self, adj_norm, output_size=16, dropout_rate=0.0, act=tf.nn.softmax):
+    def __init__(self, adj_norm, output_size=16, dropout_rate=0.0, act=tf.nn.relu):
         super(GraphConvolution, self).__init__()
         self.adj_norm = adj_norm
         self.output_size = output_size
