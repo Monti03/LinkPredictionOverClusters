@@ -16,7 +16,7 @@ from sklearn import metrics
 import matplotlib.pyplot as plt
 
 from constants import *
-from data import load_data, get_test_edges, get_false_edges, sparse_to_tuple, get_complete_cora_data, get_complete_pubmed_data
+from data import load_data, get_test_edges, get_false_edges, sparse_to_tuple, get_complete_cora_data, get_complete_data
 from metrics import clustering_metrics
 from base_model import MyModel    
 from loss import total_loss, topological_loss
@@ -194,7 +194,8 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
 
         #valid_pred_p = tf.gather(valid_pred, valid_edges_indeces)
         #valid_pred_n = tf.gather(valid_pred, valid_false_edges_indeces)
-
+        
+        print("len(valid_edges)", len(valid_edges))
         valid_pred = tf.concat([valid_pred_p, valid_pred_n], 0)
         
         valid_y = [1]*len(valid_edges) + [0]*len(valid_false_edges)
@@ -339,7 +340,7 @@ def compute_adj_norm(adj):
 
 def complete_graph(node_to_clust):
     clust = "complete"
-    adj_train, features, test_matrix, valid_matrix  = get_complete_pubmed_data()
+    adj_train, features, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME)
 
     train_edges, _, _ = sparse_to_tuple(adj_train)
     test_edges, _, _ = sparse_to_tuple(test_matrix)

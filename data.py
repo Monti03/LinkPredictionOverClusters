@@ -85,6 +85,16 @@ def load_data(dataset_name):
         return load_cora_data()
     elif(dataset_name == "pubmed"):
         return load_pubmed_data()
+    elif(dataset_name == "citeseer"):
+        return load_citeseer_data()
+    elif dataset_name == "ppi":
+        return load_ppi_data()
+    elif dataset_name == "cnv8":
+        return load_cnv8_data()
+    elif dataset_name == "deezer":
+        return load_deezer_data()
+    elif dataset_name == "pubmed_sparsest_cut":
+        return load_pubmed_data(sparsest_cut=True)
     else:
         raise NotImplementedError
 
@@ -94,19 +104,21 @@ def load_edges(file_name):
         for line in fin:
             edges.append(line.split(','))
     edges = np.array(edges)
-    return edges
+    return edges.astype(np.int)
+    
 
-def load_pubmed_data():
-    data = sio.loadmat('pubmed/pubmed.mat')
+def load_pubmed_data(sparsest_cut = False):
+    folder = "pubmed" if sparsest_cut == False else "pubmed_sparsest_cut"
+    data = sio.loadmat(f'{folder}/pubmed.mat')
     adj_complete = data['W'].toarray()
     
-    res_edges = load_edges("pubmed/res_edges.csv")
+    res_edges = load_edges(f"{folder}/res_edges.csv")
     adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_complete.shape)
     
-    test_edges = load_edges("pubmed/test_edges.csv")
+    test_edges = load_edges(f"{folder}/test_edges.csv")
     test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_complete.shape)
     
-    valid_edges = load_edges("pubmed/train_edges.csv")
+    valid_edges = load_edges(f"{folder}/train_edges.csv")
     valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_complete.shape)
 
     adj_complete = adj_complete.toarray()
@@ -117,7 +129,7 @@ def load_pubmed_data():
     
     node_to_clust = {}
     clust_to_node = {}
-    with open("pubmed/labels_pubmed.csv", "r") as fin:
+    with open(f"{folder}/labels_pubmed.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             if(clust_to_node.get(clust) == None):
@@ -167,6 +179,68 @@ def load_pred_labels(dataset_name):
             labels.append(label.strip())
         
     return labels
+
+def load_citeseer_data():
+    adj_shape = sio.loadmat("citeseer/citeseer.mat")["W"].shape
+
+    res_edges = load_edges("citeseer/citeseer_res_edges.csv")
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
+    
+    test_edges = load_edges("citeseer/citeseer_test_edges.csv")
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+    
+    valid_edges = load_edges("citeseer/citeseer_train_edges.csv")
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+
+    adj_complete = adj_complete.toarray()
+
+    # some values have a self loop, I remove it
+    for i in range(adj_complete.shape[0]):
+        adj_complete[i,i] = 0
+
+    clust_to_node = {}
+    node_to_clust = {}
+    with open("citeseer/2/labels_citeseer.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            if(clust_to_node.get(clust) == None):
+                clust_to_node[clust] = []
+            clust_to_node[clust].append(i)
+
+            node_to_clust[i] = clust
+
+    clust_to_adj = {}
+    for key in clust_to_node.keys():
+        tmp_adj = adj_complete[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]
+        clust_to_adj[key] = sp.csr_matrix(tmp_adj)
+    
+    adj_complete = None
+    
+    test_matrix = test_matrix.toarray()
+    clust_to_test = {}
+    for key in clust_to_node.keys():
+        tmp_adj = test_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]        
+        clust_to_test[key] = sp.csr_matrix(tmp_adj)
+    test_matrix = None
+
+    valid_matrix = valid_matrix.toarray()
+    clust_to_valid = {}
+    for key in clust_to_node.keys():
+        tmp_adj = valid_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]
+        clust_to_valid[key] = sp.csr_matrix(tmp_adj)
+    valid_matrix = None
+
+    all_features = sio.loadmat("citeseer/citeseer.mat")["fea"]
+    clust_to_features = {}
+    for key in clust_to_node.keys():
+        tmp_feat = all_features[clust_to_node[key],:]
+        clust_to_features[key] = sp.csr_matrix(tmp_feat)
+
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust
+
 
 def load_cora_data():
     pred_labels = load_pred_labels("CORA/cora2")
@@ -266,21 +340,21 @@ def get_complete_cora_data():
 
     return adj_complete, all_features, test_matrix, valid_matrix 
 
-def get_complete_pubmed_data():
+def get_complete_citeseer_data():
     
-    data = sio.loadmat('pubmed/pubmed.mat')
-    adj_complete = data['W'].toarray()
+    data = sio.loadmat('citeseer/citeseer.mat')
+    adj_complete = data['W']
 
     adj_shape = adj_complete.shape
 
-    res_edges = load_edges("pubmed/res_edges.csv")
+    res_edges = load_edges("citeseer/citeseer_res_edges.csv")
     
-    test_edges = load_edges("pubmed/test_edges.csv")
+    test_edges = load_edges("citeseer/citeseer_test_edges.csv")
     
-    valid_edges = load_edges("pubmed/train_edges.csv")
+    valid_edges = load_edges("citeseer/citeseer_train_edges.csv")
     
     node_to_clust = {}
-    with open("pubmed/labels_pubmed.csv", "r") as fin:
+    with open("citeseer/2/labels_citeseer.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             node_to_clust[i] = clust
@@ -301,3 +375,386 @@ def get_complete_pubmed_data():
     
     return adj_complete, all_features, test_matrix, valid_matrix 
 
+def get_complete_pubmed_data(sparsest_cut = False):
+    folder = "pubmed" if sparsest_cut == False else "pubmed_sparsest_cut"
+    
+    data = sio.loadmat(f'{folder}/pubmed.mat')
+    adj_complete = data['W'].toarray()
+
+    adj_shape = adj_complete.shape
+
+    res_edges = load_edges(f"{folder}/res_edges.csv")
+    
+    test_edges = load_edges(f"{folder}/test_edges.csv")
+    
+    valid_edges = load_edges(f"{folder}/train_edges.csv")
+    
+    node_to_clust = {}
+    with open(f"{folder}/labels_pubmed.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            node_to_clust[i] = clust
+
+    
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
+        
+    test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
+    test_edges = test_edges[test_edges_indeces]
+    
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+
+    valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
+    valid_edges = valid_edges[valid_edges_indeces]
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+    
+    all_features = sp.csr_matrix(data['fea'])
+    
+    return adj_complete, all_features, test_matrix, valid_matrix 
+
+def load_ppi_data():
+    #adj_complete = np.loadtxt(open("ppi/W.csv", "rb"), delimiter=",")
+    features = np.load("ppi/ppi-feats.npy")
+    adj_shape = (features.shape[0], features.shape[0])
+    features = None
+    
+    print("loaded features")
+
+    res_edges = load_edges("ppi/ppi_res_edges.csv")
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
+    
+    test_edges = load_edges("ppi/ppi_test_edges.csv")
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+    
+    valid_edges = load_edges("ppi/ppi_train_edges.csv")
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+
+    # some values have a self loop, I remove it
+    for i in range(adj_complete.shape[0]):
+        adj_complete[i,i] = 0
+
+    clust_to_node = {}
+    node_to_clust = {}
+    with open("ppi/2/labels_ppi.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            if(clust_to_node.get(clust) == None):
+                clust_to_node[clust] = []
+            clust_to_node[clust].append(i)
+
+            node_to_clust[i] = clust
+    
+    for key in clust_to_node.keys():
+        print(f"{key} shape: {len(clust_to_node[key])}")
+
+    clust_to_adj = {}
+    for key in clust_to_node.keys():
+        tmp_adj = adj_complete[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]
+        clust_to_adj[key] = sp.csr_matrix(tmp_adj)
+    
+    adj_complete = None
+    
+    #test_matrix = test_matrix.toarray()
+    clust_to_test = {}
+    for key in clust_to_node.keys():
+        tmp_adj = test_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]        
+        clust_to_test[key] = sp.csr_matrix(tmp_adj)
+    test_matrix = None
+
+    #valid_matrix = valid_matrix.toarray()
+    clust_to_valid = {}
+    for key in clust_to_node.keys():
+        tmp_adj = valid_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]
+        clust_to_valid[key] = sp.csr_matrix(tmp_adj)
+    valid_matrix = None
+    
+    all_features = np.load("ppi/ppi-feats.npy")
+
+    clust_to_features = {}
+    for key in clust_to_node.keys():
+        tmp_feat = all_features[clust_to_node[key],:]
+        clust_to_features[key] = sp.csr_matrix(tmp_feat)
+
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust
+
+
+def get_complete_ppi_data():
+    all_features = np.load("ppi/ppi-feats.npy")
+    adj_shape = (all_features.shape[0], all_features.shape[0])
+    
+    print("complete shape", adj_shape)
+
+    all_features = sp.csr_matrix(all_features) 
+
+    res_edges = load_edges("ppi/ppi_res_edges.csv")
+    
+    test_edges = load_edges("ppi/ppi_test_edges.csv")
+    
+    valid_edges = load_edges("ppi/ppi_train_edges.csv")
+    
+    node_to_clust = {}
+    with open("ppi/2/labels_ppi.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            node_to_clust[i] = clust
+
+    
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
+        
+    test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
+    test_edges = test_edges[test_edges_indeces]
+    
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+
+    valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
+    valid_edges = valid_edges[valid_edges_indeces]
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+    
+    return adj_complete, all_features, test_matrix, valid_matrix 
+
+def load_cnv8_data():
+    features = np.genfromtxt("cnv8/features.csv", delimiter=",")
+
+    adj_shape = (features.shape[0], features.shape[0])
+    features = None
+    
+    print("loaded features")
+
+    res_edges = load_edges("cnv8/cnv8_res_edges.csv")
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
+    
+    test_edges = load_edges("cnv8/cnv8_test_edges.csv")
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+    
+    valid_edges = load_edges("cnv8/cnv8_train_edges.csv")
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+
+    print("setting to zero the main diagonal")
+
+    # some values have a self loop, I remove it
+    #for i in range(adj_complete.shape[0]):
+    #adj_complete[i,i] = 0
+
+    adj_complete.setdiag([0]*adj_shape[0])
+
+    print("computing node to clust")
+
+    clust_to_node = {}
+    node_to_clust = {}
+    with open("cnv8/6/labels_cnv8.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            if(clust_to_node.get(clust) == None):
+                clust_to_node[clust] = []
+            clust_to_node[clust].append(i)
+
+            node_to_clust[i] = clust
+    
+    for key in clust_to_node.keys():
+        print(f"{key} shape: {len(clust_to_node[key])}")
+
+
+    print("computing clust to adj")
+
+    clust_to_adj = {}
+    for key in clust_to_node.keys():
+        tmp_adj = adj_complete[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]
+        clust_to_adj[key] = sp.csr_matrix(tmp_adj)
+    
+    adj_complete = None
+
+    print("computing clust to test")
+    #test_matrix = test_matrix.toarray()
+    clust_to_test = {}
+    for key in clust_to_node.keys():
+        tmp_adj = test_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]        
+        clust_to_test[key] = sp.csr_matrix(tmp_adj)
+    test_matrix = None
+
+    #valid_matrix = valid_matrix.toarray()
+    print("computing clust to valid")
+    clust_to_valid = {}
+    for key in clust_to_node.keys():
+        tmp_adj = valid_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]
+        clust_to_valid[key] = sp.csr_matrix(tmp_adj)
+    valid_matrix = None
+    
+    all_features = np.load("ppi/ppi-feats.npy")
+
+    print("computing clust to features")
+    clust_to_features = {}
+    for key in clust_to_node.keys():
+        tmp_feat = all_features[clust_to_node[key],:]
+        clust_to_features[key] = sp.csr_matrix(tmp_feat)
+
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust
+
+
+def get_complete_cnv8():
+    all_features = np.genfromtxt("cnv8/features.csv", delimiter=",")
+    print("got features")
+    all_features = sp.csr_matrix(all_features)
+    
+    adj_shape = (all_features.shape[0], all_features.shape[0])
+    print("complete shape", adj_shape)
+
+    print("load edges")
+    res_edges = load_edges("cnv8/cnv8_res_edges.csv")
+    
+    test_edges = load_edges("cnv8/cnv8_test_edges.csv")
+    
+    valid_edges = load_edges("cnv8/cnv8_train_edges.csv")
+    
+    print("computing node to clust")
+    node_to_clust = {}
+    with open("cnv8/6/labels_cnv8.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            node_to_clust[i] = clust
+
+    print("computing adj complete")
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
+    
+    print("computing test matrix")
+    test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
+    test_edges = test_edges[test_edges_indeces]
+    
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+    
+    print("computing valid matrix")
+    valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
+    valid_edges = valid_edges[valid_edges_indeces]
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+    
+    return adj_complete, all_features, test_matrix, valid_matrix 
+
+def load_deezer_data():
+
+    res_edges = load_edges("deezer/deezer_res_edges.csv")
+    test_edges = load_edges("deezer/deezer_test_edges.csv")
+    valid_edges = load_edges("deezer/deezer_train_edges.csv")
+    
+    print(res_edges.__class__)
+    print(res_edges[0][0].__class__)
+
+    n_nodes = max(res_edges.max(), test_edges.max(), valid_edges.max()) + 1
+    adj_shape = (n_nodes, n_nodes)
+    
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+
+    # some values have a self loop, I remove it
+    for i in range(adj_complete.shape[0]):
+        adj_complete[i,i] = 0
+
+    clust_to_node = {}
+    node_to_clust = {}
+    with open("deezer/3/labels_deezer.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            if(clust_to_node.get(clust) == None):
+                clust_to_node[clust] = []
+            clust_to_node[clust].append(i)
+
+            node_to_clust[i] = clust
+    
+    for key in clust_to_node.keys():
+        print(f"{key} shape: {len(clust_to_node[key])}")
+
+    clust_to_adj = {}
+    for key in clust_to_node.keys():
+        tmp_adj = adj_complete[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]
+        clust_to_adj[key] = sp.csr_matrix(tmp_adj)
+    
+    adj_complete = None
+    
+    #test_matrix = test_matrix.toarray()
+    clust_to_test = {}
+    for key in clust_to_node.keys():
+        tmp_adj = test_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]        
+        clust_to_test[key] = sp.csr_matrix(tmp_adj)
+    test_matrix = None
+
+    #valid_matrix = valid_matrix.toarray()
+    clust_to_valid = {}
+    for key in clust_to_node.keys():
+        tmp_adj = valid_matrix[clust_to_node[key],:]
+        tmp_adj = tmp_adj[:,clust_to_node[key]]
+        clust_to_valid[key] = sp.csr_matrix(tmp_adj)
+    valid_matrix = None
+    
+    #all_features = sp.diags([1]*n_nodes)
+
+    clust_to_features = {}
+    for key in clust_to_node.keys():
+        #tmp_feat = #all_features[clust_to_node[key],:]
+        clust_to_features[key] = sp.diags([1]*len(clust_to_node[key]))#sp.csr_matrix(tmp_feat)
+
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust
+
+
+def get_complete_deezer_data():
+    
+    print("load edges")
+    res_edges = load_edges("deezer/deezer_res_edges.csv")
+    
+    test_edges = load_edges("deezer/deezer_test_edges.csv")
+    
+    valid_edges = load_edges("deezer/deezer_train_edges.csv")
+    
+    n_nodes = max(res_edges.max(), test_edges.max(), valid_edges.max()) + 1
+
+    adj_shape = (n_nodes, n_nodes)
+    print("complete shape", adj_shape)
+
+    print("computing node to clust")
+    node_to_clust = {}
+    with open("deezer/3/labels_deezer.csv", "r") as fin:
+        for i, line in enumerate(fin):
+            clust = int(line.strip())
+            node_to_clust[i] = clust
+
+    print("computing adj complete")
+    adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
+    
+    print("computing test matrix")
+    test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
+    test_edges = test_edges[test_edges_indeces]
+    
+    test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
+    
+    print("computing valid matrix")
+    valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
+    valid_edges = valid_edges[valid_edges_indeces]
+    valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
+    
+    all_features = sp.diags([1]*n_nodes)
+
+    return adj_complete, all_features, test_matrix, valid_matrix 
+
+
+def get_complete_data(dataset):
+    if dataset == "pubmed":
+        return get_complete_pubmed_data()
+    elif dataset == "cora":
+        return get_complete_cora_data()
+    elif dataset == "citeseer":
+        return get_complete_citeseer_data()
+    elif dataset == "ppi":
+        return get_complete_ppi_data()
+    elif dataset == "cnv8":
+        return get_complete_cnv8()
+    elif dataset == "deezer":
+        return get_complete_deezer_data()
+    elif dataset == "pubmed_sparsest_cut":
+        return get_complete_pubmed_data(sparsest_cut=True)
+    else:
+        raise Exception("unknown dataset")

@@ -4,14 +4,14 @@ import tensorflow_probability as tfp
 
 # loss that considers the error reconstructing some edges
 def topological_loss(y_actual, y_pred):
-    #return tf.keras.losses.BinaryCrossentropy(from_logits=True)(y_actual, y_pred)
+    return tf.keras.losses.BinaryCrossentropy(from_logits=True)(y_actual, y_pred)
 
-    loss =  tf.nn.weighted_cross_entropy_with_logits(
+    """ loss =  tf.nn.weighted_cross_entropy_with_logits(
         y_actual, y_pred, POS_WIGHT
     )
 
     return tf.math.reduce_mean(loss)
-
+    """
 # get the total loss as topological loss - LK div
 def total_loss(y_actual, y_pred, logvar, mu, n_nodes, norm):
     top_loss = topological_loss(y_actual, y_pred)
