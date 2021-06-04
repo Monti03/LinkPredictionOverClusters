@@ -1,5 +1,5 @@
 import tensorflow as tf
-
+from constants import SEED
 
 # noise_shape is [num_nonzero_elements], namely it is a list containing the number of elements of the sparse tensor
 # keep_prob is 1-dropout_rate 
@@ -24,7 +24,7 @@ class GraphSparseConvolution(tf.keras.layers.Layer):
 
     # input_shape here will be automatically set as the shape of the input tensor, that will be the feature matrix
     def build(self, input_shape):
-        init = tf.keras.initializers.GlorotNormal(seed=None)
+        init = tf.keras.initializers.GlorotNormal(seed=SEED)
         self.kernel = self.add_weight('kernel', initializer=init, shape=[int(input_shape[-1]),self.output_size])
 
     # the input is a sparse tensor whose elements have been explicitly converted to floats
@@ -49,8 +49,8 @@ class GraphConvolution(tf.keras.layers.Layer):
         self.dropout = tf.keras.layers.Dropout(rate=self.dropout_rate)
     
     def build(self, input_shape):
-        init = tf.keras.initializers.GlorotNormal(seed=None)
-        self.kernel = self.add_weight('kernel', initializer=init, shape=[int(input_shape[-1]),self.output_size])
+        init = tf.keras.initializers.GlorotNormal(seed=SEED)
+        self.kernel = self.add_weight('kernel_', initializer=init, shape=[int(input_shape[-1]),self.output_size])
 
 
     # the input to the call function is a dense tensor whose elements have been explicitly converted to floats

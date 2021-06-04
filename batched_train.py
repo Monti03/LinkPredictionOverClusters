@@ -136,17 +136,22 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
                 train_pred = tf.concat((train_pos_pred, train_neg_pred), 0)
                 tmp_train_y = tf.concat([tf.ones(train_pos_pred.shape[0]),tf.zeros(train_neg_pred.shape[0])], 0)
                 
+                loss_weights = tf.convert_to_tensor([[-0.1]*train_pos_pred.shape[0] + [1]*train_neg_pred.shape[0]])
+                """ print(loss_weights.shape)
+                print(train_pred.shape)
+                print(tmp_train_y.shape) """
+
                 # get loss
-                loss = topological_loss(tmp_train_y, train_pred)#total_loss(tmp_train_y, train_pred, logvar, mu, n_nodes, top_loss_norm)
-                
+                loss = topological_loss(tmp_train_y, train_pred, loss_weights)#total_loss(tmp_train_y, train_pred, logvar, mu, n_nodes, top_loss_norm)
+
+                # get gradient from loss 
+                grad = tape.gradient(loss, model.trainable_variables)
+
                 # get acc
                 ta = tf.keras.metrics.Accuracy()
                 ta.update_state(tmp_train_y, tf.round(tf.nn.sigmoid(train_pred)))
                 train_acc = ta.result().numpy()
 
-                # get gradient from loss 
-                grad = tape.gradient(loss, model.trainable_variables)
-            
                 # optimize the weights
                 optimizer.apply_gradients(zip(grad, model.trainable_variables))
 
@@ -200,8 +205,10 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
         
         valid_y = [1]*len(valid_edges) + [0]*len(valid_false_edges)
         valid_y = tf.convert_to_tensor(valid_y, dtype=tf.float32)
-      
-        valid_loss = topological_loss(valid_y, valid_pred)#total_loss(valid_y, valid_pred, logvar, mu, n_nodes, top_loss_norm)
+
+        loss_weights = tf.convert_to_tensor([[-0.1]*len(valid_edges) + [1]*len(valid_false_edges)])
+
+        valid_loss = topological_loss(valid_y, valid_pred, loss_weights)#total_loss(valid_y, valid_pred, logvar, mu, n_nodes, top_loss_norm)
 
 
         va = tf.keras.metrics.Accuracy()
@@ -284,15 +291,17 @@ def get_scores(embs, edges_pos, edges_neg, dataset, clust):
     roc_score = metrics.roc_auc_score(labels_all, preds_all)
     ap_score = metrics.average_precision_score(labels_all, preds_all)
 
-    plt.clf()
-    cm = metrics.confusion_matrix(labels_all, np.round(preds_all))
-    df_cm = pd.DataFrame(cm, index = [i for i in "01"],
-                  columns = [i for i in "01"])
-    plt.figure(figsize = (10,7))
-    sn.heatmap(df_cm, annot=True, fmt='g')
-    plt.xlabel("predicted labels")
-    plt.ylabel("true labels")
-    plt.savefig(f"plots/conf_matrix_{dataset}_{clust}.png")
+    for t in [0.5]:#, 0.6, 0.65, 0.7]:
+
+        plt.clf()
+        cm = metrics.confusion_matrix(labels_all, np.where(preds_all > t, 1, 0))#np.round(preds_all))
+        df_cm = pd.DataFrame(cm, index = [i for i in "01"],
+                    columns = [i for i in "01"])
+        plt.figure(figsize = (10,7))
+        sn.heatmap(df_cm, annot=True, fmt='g')
+        plt.xlabel("predicted labels")
+        plt.ylabel("true labels")
+        plt.savefig(f"plots/conf_matrix_{dataset}_{clust}_{t}.png")
 
     print(f"roc_score: {roc_score}")
     print(f"ap_score: {ap_score}")
@@ -393,7 +402,7 @@ if __name__ == "__main__":
     clust_to_node = data[4]
     node_to_clust = data[5]
 
-    test_false_matrix, valid_false_matrix, test_ap, test_auc = complete_graph(node_to_clust)
+    test_false_matrix, valid_false_matrix, test_ap, test_auc = complete_graph(None)#(node_to_clust)
 
     n_test_edges = []
     n_valid_edges = []
@@ -402,63 +411,63 @@ if __name__ == "__main__":
     test_aucs = [test_auc]
 
     subset_lenghts = []
+    if(False):
+        for clust in range(len(adjs.keys())):
+            print("\n")
+            #complete_adj = adjs[clust]
 
-    for clust in range(len(adjs.keys())):
-        print("\n")
-        #complete_adj = adjs[clust]
+            adj_train = adjs[clust]
 
-        adj_train = adjs[clust]
-
-        train_edges, _, _ = sparse_to_tuple(adj_train)
-        test_edges, _, _ = sparse_to_tuple(tests[clust])
-        valid_edges, _, _ = sparse_to_tuple(valids[clust])
-        
-        n_test_edges.append(test_edges.shape[0])
-        n_valid_edges.append(valid_edges.shape[0])
+            train_edges, _, _ = sparse_to_tuple(adj_train)
+            test_edges, _, _ = sparse_to_tuple(tests[clust])
+            valid_edges, _, _ = sparse_to_tuple(valids[clust])
+            
+            n_test_edges.append(test_edges.shape[0])
+            n_valid_edges.append(valid_edges.shape[0])
 
 
-        test_false_matrix_c = test_false_matrix[clust_to_node[clust], :]
-        test_false_matrix_c = test_false_matrix_c[:, clust_to_node[clust]]
+            test_false_matrix_c = test_false_matrix[clust_to_node[clust], :]
+            test_false_matrix_c = test_false_matrix_c[:, clust_to_node[clust]]
 
-        valid_false_matrix_c = valid_false_matrix[clust_to_node[clust], :]
-        valid_false_matrix_c = valid_false_matrix_c[:, clust_to_node[clust]]
-        
-        test_false_edges, _, _ = sparse_to_tuple(test_false_matrix_c)
-        valid_false_edges, _, _ = sparse_to_tuple(valid_false_matrix_c)
+            valid_false_matrix_c = valid_false_matrix[clust_to_node[clust], :]
+            valid_false_matrix_c = valid_false_matrix_c[:, clust_to_node[clust]]
+            
+            test_false_edges, _, _ = sparse_to_tuple(test_false_matrix_c)
+            valid_false_edges, _, _ = sparse_to_tuple(valid_false_matrix_c)
 
-        #false_edges = get_false_edges(adj_train, test_edges.shape[0] + valid_edges.shape[0])
-        #valid_false_edges = false_edges[:valid_edges.shape[0]]
-        #test_false_edges = false_edges[valid_edges.shape[0]:]
+            #false_edges = get_false_edges(adj_train, test_edges.shape[0] + valid_edges.shape[0])
+            #valid_false_edges = false_edges[:valid_edges.shape[0]]
+            #test_false_edges = false_edges[valid_edges.shape[0]:]
 
-        """ train_split = get_test_edges(complete_adj, test_size=0.1, train_size=0.1)
+            """ train_split = get_test_edges(complete_adj, test_size=0.1, train_size=0.1)
 
-        adj_train_triu, train_edges, valid_edges, valid_false_edges, test_edges, test_false_edges = train_split """
+            adj_train_triu, train_edges, valid_edges, valid_false_edges, test_edges, test_false_edges = train_split """
 
-        subset_lenghts.append((len(valid_edges), len(valid_false_edges), len(test_edges), len(test_false_edges)))
+            subset_lenghts.append((len(valid_edges), len(valid_false_edges), len(test_edges), len(test_false_edges)))
 
-        # since get_test_edges returns a triu, we sum to its transpose 
-        adj_train = adj_train + adj_train.T
+            # since get_test_edges returns a triu, we sum to its transpose 
+            adj_train = adj_train + adj_train.T
 
-        # get normalized adj
-        adj_train_norm = compute_adj_norm(adj_train)
+            # get normalized adj
+            adj_train_norm = compute_adj_norm(adj_train)
 
-        features = features_[clust]
-        
-        print(f"valid_edges: {valid_edges.shape[0]}")
-        print(f"valid_false_edges: {valid_false_edges.shape[0]}")
+            features = features_[clust]
+            
+            print(f"valid_edges: {valid_edges.shape[0]}")
+            print(f"valid_false_edges: {valid_false_edges.shape[0]}")
 
-        # start training
-        model = train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust)
+            # start training
+            model = train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust)
 
-        model.save_weights(f"weights/{DATASET_NAME}_{clust}")
+            model.save_weights(f"weights/{DATASET_NAME}_{clust}")
 
-        test_ap, test_auc = test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
-        
-        test_aps.append(test_ap)
-        test_aucs.append(test_auc)    
+            test_ap, test_auc = test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
+            
+            test_aps.append(test_ap)
+            test_aucs.append(test_auc)    
 
-    print(f"test ap: {test_aps}")
-    print(f"test auc: {test_aucs}")
-    print()
-    print(f"n_test_edges: {n_test_edges}")
-    print(f"n_valid_edges: {n_valid_edges}")
+        print(f"test ap: {test_aps}")
+        print(f"test auc: {test_aucs}")
+        print()
+        print(f"n_test_edges: {n_test_edges}")
+        print(f"n_valid_edges: {n_valid_edges}")

@@ -83,7 +83,7 @@ def load_data(dataset_name):
 
     if(dataset_name == "cora"):
         return load_cora_data()
-    elif(dataset_name == "pubmed"):
+    elif(dataset_name == "pubmed" or dataset_name == "pubmed_leave_intra_clust"):
         return load_pubmed_data()
     elif(dataset_name == "citeseer"):
         return load_citeseer_data()
@@ -109,16 +109,16 @@ def load_edges(file_name):
 
 def load_pubmed_data(sparsest_cut = False):
     folder = "pubmed" if sparsest_cut == False else "pubmed_sparsest_cut"
-    data = sio.loadmat(f'{folder}/pubmed.mat')
+    data = sio.loadmat(f'data/{folder}/pubmed.mat')
     adj_complete = data['W'].toarray()
     
-    res_edges = load_edges(f"{folder}/res_edges.csv")
+    res_edges = load_edges(f"data/{folder}/res_edges.csv")
     adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_complete.shape)
     
-    test_edges = load_edges(f"{folder}/test_edges.csv")
+    test_edges = load_edges(f"data/{folder}/test_edges.csv")
     test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_complete.shape)
     
-    valid_edges = load_edges(f"{folder}/train_edges.csv")
+    valid_edges = load_edges(f"data/{folder}/train_edges.csv")
     valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_complete.shape)
 
     adj_complete = adj_complete.toarray()
@@ -129,7 +129,7 @@ def load_pubmed_data(sparsest_cut = False):
     
     node_to_clust = {}
     clust_to_node = {}
-    with open(f"{folder}/labels_pubmed.csv", "r") as fin:
+    with open(f"data/{folder}/labels_pubmed.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             if(clust_to_node.get(clust) == None):
@@ -375,36 +375,39 @@ def get_complete_citeseer_data():
     
     return adj_complete, all_features, test_matrix, valid_matrix 
 
-def get_complete_pubmed_data(sparsest_cut = False):
+def get_complete_pubmed_data(sparsest_cut = False, leave_intra_clust_edges = False):
     folder = "pubmed" if sparsest_cut == False else "pubmed_sparsest_cut"
     
-    data = sio.loadmat(f'{folder}/pubmed.mat')
+    data = sio.loadmat(f'data/{folder}/pubmed.mat')
     adj_complete = data['W'].toarray()
 
     adj_shape = adj_complete.shape
 
-    res_edges = load_edges(f"{folder}/res_edges.csv")
+    res_edges = load_edges(f"data/{folder}/res_edges.csv")
     
-    test_edges = load_edges(f"{folder}/test_edges.csv")
+    test_edges = load_edges(f"data/{folder}/test_edges.csv")
     
-    valid_edges = load_edges(f"{folder}/train_edges.csv")
+    valid_edges = load_edges(f"data/{folder}/train_edges.csv")
     
     node_to_clust = {}
-    with open(f"{folder}/labels_pubmed.csv", "r") as fin:
+    with open(f"data/{folder}/labels_pubmed.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             node_to_clust[i] = clust
 
     
     adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
-        
-    test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
-    test_edges = test_edges[test_edges_indeces]
+
+    if(not leave_intra_clust_edges): 
+        test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
+        test_edges = test_edges[test_edges_indeces]
     
     test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
 
-    valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
-    valid_edges = valid_edges[valid_edges_indeces]
+
+    if(not leave_intra_clust_edges):
+        valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
+        valid_edges = valid_edges[valid_edges_indeces]
     valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
     
     all_features = sp.csr_matrix(data['fea'])
@@ -756,5 +759,7 @@ def get_complete_data(dataset):
         return get_complete_deezer_data()
     elif dataset == "pubmed_sparsest_cut":
         return get_complete_pubmed_data(sparsest_cut=True)
+    elif dataset == "pubmed_leave_intra_clust":
+        return get_complete_pubmed_data(leave_intra_clust_edges=True)
     else:
         raise Exception("unknown dataset")
