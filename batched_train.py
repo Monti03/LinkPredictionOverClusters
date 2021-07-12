@@ -21,9 +21,12 @@ from metrics import clustering_metrics
 from base_model import MyModel    
 from loss import total_loss, topological_loss
 
+import time
+
 # set the seed
 tf.random.set_seed(SEED)
 random.seed(SEED)
+np.random.RandomState(SEED)
 
 
 # convert sparse matrix to sparse tensor
@@ -291,7 +294,7 @@ def get_scores(embs, edges_pos, edges_neg, dataset, clust):
     roc_score = metrics.roc_auc_score(labels_all, preds_all)
     ap_score = metrics.average_precision_score(labels_all, preds_all)
 
-    for t in [0.5]:#, 0.6, 0.65, 0.7]:
+    for t in [0.5, 0.6, 0.7]:
 
         plt.clf()
         cm = metrics.confusion_matrix(labels_all, np.where(preds_all > t, 1, 0))#np.round(preds_all))
@@ -374,20 +377,24 @@ def complete_graph(node_to_clust):
     print(f"valid_edges: {valid_edges.shape[0]}")
     print(f"valid_false_edges: {valid_false_edges.shape[0]}")
 
+    test_ap, test_auc = 0,0
     # start training
-    model = train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust, node_to_clust=node_to_clust)
+    start_time = time.time()
+    #model = train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust, node_to_clust=node_to_clust)
+    execution_time = time.time() - start_time
+    #model.save_weights(f"weights/{DATASET_NAME}_{clust}")
 
-    model.save_weights(f"weights/{DATASET_NAME}_{clust}")
-
-    test_ap, test_auc = test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
+    #test_ap, test_auc = test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
     
+
+
     test_ones = [1]*test_false_edges.shape[0]
     valid_ones = [1]*valid_false_edges.shape[0]
 
     test_false_matrix = csr_matrix((test_ones, (test_false_edges[:,0], test_false_edges[:,1])), adj_train.shape)
     valid_false_matrix = csr_matrix((valid_ones, (valid_false_edges[:,0], valid_false_edges[:,1])), adj_train.shape)
 
-    return test_false_matrix, valid_false_matrix, test_ap, test_auc
+    return test_false_matrix, valid_false_matrix, test_ap, test_auc, execution_time
 
 if __name__ == "__main__":
     
@@ -402,72 +409,67 @@ if __name__ == "__main__":
     clust_to_node = data[4]
     node_to_clust = data[5]
 
-    test_false_matrix, valid_false_matrix, test_ap, test_auc = complete_graph(None)#(node_to_clust)
+    test_false_matrix, valid_false_matrix, test_ap, test_auc, execution_time = complete_graph(None)#(node_to_clust)
 
     n_test_edges = []
     n_valid_edges = []
 
     test_aps = [test_ap]
     test_aucs = [test_auc]
+    execution_times = [execution_time]
 
     subset_lenghts = []
-    if(False):
-        for clust in range(len(adjs.keys())):
-            print("\n")
-            #complete_adj = adjs[clust]
+    
+    for clust in range(len(adjs.keys())):
+        print("\n")
+        #complete_adj = adjs[clust]
 
-            adj_train = adjs[clust]
+        adj_train = adjs[clust]
 
-            train_edges, _, _ = sparse_to_tuple(adj_train)
-            test_edges, _, _ = sparse_to_tuple(tests[clust])
-            valid_edges, _, _ = sparse_to_tuple(valids[clust])
-            
-            n_test_edges.append(test_edges.shape[0])
-            n_valid_edges.append(valid_edges.shape[0])
+        train_edges, _, _ = sparse_to_tuple(adj_train)
+        test_edges, _, _ = sparse_to_tuple(tests[clust])
+        valid_edges, _, _ = sparse_to_tuple(valids[clust])
+        
+        n_test_edges.append(test_edges.shape[0])
+        n_valid_edges.append(valid_edges.shape[0])
 
 
-            test_false_matrix_c = test_false_matrix[clust_to_node[clust], :]
-            test_false_matrix_c = test_false_matrix_c[:, clust_to_node[clust]]
+        test_false_matrix_c = test_false_matrix[clust_to_node[clust], :]
+        test_false_matrix_c = test_false_matrix_c[:, clust_to_node[clust]]
 
-            valid_false_matrix_c = valid_false_matrix[clust_to_node[clust], :]
-            valid_false_matrix_c = valid_false_matrix_c[:, clust_to_node[clust]]
-            
-            test_false_edges, _, _ = sparse_to_tuple(test_false_matrix_c)
-            valid_false_edges, _, _ = sparse_to_tuple(valid_false_matrix_c)
+        valid_false_matrix_c = valid_false_matrix[clust_to_node[clust], :]
+        valid_false_matrix_c = valid_false_matrix_c[:, clust_to_node[clust]]
+        
+        test_false_edges, _, _ = sparse_to_tuple(test_false_matrix_c)
+        valid_false_edges, _, _ = sparse_to_tuple(valid_false_matrix_c)
 
-            #false_edges = get_false_edges(adj_train, test_edges.shape[0] + valid_edges.shape[0])
-            #valid_false_edges = false_edges[:valid_edges.shape[0]]
-            #test_false_edges = false_edges[valid_edges.shape[0]:]
+        subset_lenghts.append((len(valid_edges), len(valid_false_edges), len(test_edges), len(test_false_edges)))
 
-            """ train_split = get_test_edges(complete_adj, test_size=0.1, train_size=0.1)
+        # since get_test_edges returns a triu, we sum to its transpose 
+        adj_train = adj_train + adj_train.T
 
-            adj_train_triu, train_edges, valid_edges, valid_false_edges, test_edges, test_false_edges = train_split """
+        # get normalized adj
+        adj_train_norm = compute_adj_norm(adj_train)
 
-            subset_lenghts.append((len(valid_edges), len(valid_false_edges), len(test_edges), len(test_false_edges)))
+        features = features_[clust]
+        
+        print(f"valid_edges: {valid_edges.shape[0]}")
+        print(f"valid_false_edges: {valid_false_edges.shape[0]}")
 
-            # since get_test_edges returns a triu, we sum to its transpose 
-            adj_train = adj_train + adj_train.T
+        # start training
+        start_time = time.time()
+        model = train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust)
+        execution_times.append(time.time() - start_time)
+        model.save_weights(f"weights/{DATASET_NAME}_{clust}")
 
-            # get normalized adj
-            adj_train_norm = compute_adj_norm(adj_train)
+        test_ap, test_auc = test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
+        
+        test_aps.append(test_ap)
+        test_aucs.append(test_auc)    
 
-            features = features_[clust]
-            
-            print(f"valid_edges: {valid_edges.shape[0]}")
-            print(f"valid_false_edges: {valid_false_edges.shape[0]}")
-
-            # start training
-            model = train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust)
-
-            model.save_weights(f"weights/{DATASET_NAME}_{clust}")
-
-            test_ap, test_auc = test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
-            
-            test_aps.append(test_ap)
-            test_aucs.append(test_auc)    
-
-        print(f"test ap: {test_aps}")
-        print(f"test auc: {test_aucs}")
-        print()
-        print(f"n_test_edges: {n_test_edges}")
-        print(f"n_valid_edges: {n_valid_edges}")
+    print(f"test ap: {test_aps}")
+    print(f"test auc: {test_aucs}")
+    print(f"execution_times: {execution_times}")
+    print()
+    print(f"n_test_edges: {n_test_edges}")
+    print(f"n_valid_edges: {n_valid_edges}")

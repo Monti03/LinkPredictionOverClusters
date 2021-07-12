@@ -6,11 +6,6 @@ from constants import *
 def topological_loss(y_actual, y_pred, sample_weight=None):
     return tf.keras.losses.BinaryCrossentropy(from_logits=True)(y_actual, y_pred, sample_weight=sample_weight)
 
-    """ loss =  tf.nn.weighted_cross_entropy_with_logits(
-        y_actual, y_pred, pos_weight=POS_WIGHT
-    )
-
-    return tf.math.reduce_mean(loss) """
    
 # get the total loss as topological loss - LK div
 def total_loss(y_actual, y_pred, logvar, mu, n_nodes, norm):

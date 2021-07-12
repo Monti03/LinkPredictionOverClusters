@@ -2,7 +2,7 @@ import tensorflow as tf
 from constants import *
 from layers import *
 
-import tensorflow_probability as tfp
+#import tensorflow_probability as tfp
 
 
 class MyModel(tf.keras.Model):

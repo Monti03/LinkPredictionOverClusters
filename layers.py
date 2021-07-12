@@ -38,6 +38,32 @@ class GraphSparseConvolution(tf.keras.layers.Layer):
         outputs = self.act(x)
         return outputs
 
+class GraphSparseConvolutionSharingClusterWeights(tf.keras.layers.Layer):
+    
+    def __init__(self, adj_norms, output_size=32, dropout_rate=0.0, act=tf.nn.relu):
+        super(GraphSparseConvolutionSharingClusterWeights, self).__init__()
+        self.adj_norms = adj_norms
+        self.output_size = output_size
+        self.dropout_rate = dropout_rate
+        self.act = act
+
+
+    # input_shape here will be automatically set as the shape of the input tensor, that will be the feature matrix
+    def build(self, input_shape):
+        init = tf.keras.initializers.GlorotNormal(seed=SEED)
+        self.kernel = self.add_weight('kernel', initializer=init, shape=[int(input_shape[-1]),self.output_size])
+
+    # the input is a sparse tensor whose elements have been explicitly converted to floats
+    # compute ReLU(Ã inputs Weights)
+    def call(self, inputs, cluster, training):
+        x = inputs
+        if(training):
+            x = dropout_sparse(inputs, 1-self.dropout_rate, [len(inputs.values)])
+        x = tf.sparse.sparse_dense_matmul(x, self.kernel)
+        x = tf.sparse.sparse_dense_matmul(self.adj_norms[cluster], x)
+        outputs = self.act(x)
+        return outputs
+
 # the only difference between these two classes is that the first will treat also the features as a sparse matrix (the adjacency matrix will always be sparse)
 class GraphConvolution(tf.keras.layers.Layer):
     def __init__(self, adj_norm, output_size=16, dropout_rate=0.0, act=tf.nn.relu):
@@ -58,6 +84,29 @@ class GraphConvolution(tf.keras.layers.Layer):
         x = self.dropout(inputs, training=training)
         x = tf.matmul(x, self.kernel)
         x = tf.sparse.sparse_dense_matmul(self.adj_norm, x)
+        outputs = self.act(x)
+        return outputs
+
+# the only difference with the above method, is that in this case the weights are shared among the different clusters
+class GraphConvolutionSharingClusterWeights(tf.keras.layers.Layer):
+    def __init__(self, adj_norms, output_size=16, dropout_rate=0.0, act=tf.nn.relu):
+        super(GraphConvolutionSharingClusterWeights, self).__init__()
+        self.adj_norms = adj_norms
+        self.output_size = output_size
+        self.dropout_rate = dropout_rate
+        self.act= act
+        self.dropout = tf.keras.layers.Dropout(rate=self.dropout_rate)
+    
+    def build(self, input_shape):
+        init = tf.keras.initializers.GlorotNormal(seed=SEED)
+        self.kernel = self.add_weight('kernel_', initializer=init, shape=[int(input_shape[-1]),self.output_size])
+
+
+    # the input to the call function is a dense tensor whose elements have been explicitly converted to floats
+    def call(self, inputs, cluster, training):
+        x = self.dropout(inputs, training=training)
+        x = tf.matmul(x, self.kernel)
+        x = tf.sparse.sparse_dense_matmul(self.adj_norms[cluster], x)
         outputs = self.act(x)
         return outputs
 
