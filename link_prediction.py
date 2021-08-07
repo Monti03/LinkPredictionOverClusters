@@ -14,12 +14,13 @@ import tensorflow as tf
 
 from sklearn import metrics
 import matplotlib.pyplot as plt
+from tensorflow.python.framework.func_graph import flatten
 
 from constants import *
 from data import load_data, get_test_edges, get_false_edges, sparse_to_tuple, get_complete_cora_data
 from metrics import clustering_metrics
-from model import MyModel    
-from loss import total_loss
+from base_model import MyModel    
+from loss import total_loss, topological_loss
 
 # set the seed
 tf.random.set_seed(SEED)
@@ -36,7 +37,7 @@ def convert_sparse_matrix_to_sparse_tensor(sparse_mx):
     sparse_tensor = tf.SparseTensor(indices=indices_matrix, values=values, dense_shape=shape)
     return tf.cast(sparse_tensor, dtype=tf.float32)
 
-def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust_id):
+def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust_id, node_to_clust = None):
     train_accs = []
     train_losses = []
 
@@ -70,25 +71,31 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
     print(f"valid_edges_indeces: {len(valid_edges_indeces)}")
     print(f"valid_false_edges_indeces: {len(valid_false_edges_indeces)}")
 
+    train_false_edges = get_false_edges(adj_train, len(train_edges), node_to_clust=node_to_clust)
+    train_false_edges_indeces = [x[0]*n_nodes + x[1] for x in train_false_edges]
+
+    train_y_pos_edges = tf.convert_to_tensor([1.0]*len(train_edges))
+    train_y_neg_edges = tf.convert_to_tensor([0.0]*len(train_false_edges_indeces))
+
+    tmp_train_y = tf.concat([train_y_pos_edges, train_y_neg_edges], 0)
+
+    n_epochs = 0
+
+    flatten_shape = n_nodes * n_nodes
+
     for i in range(EPOCHS):
+        n_epochs = i
         print(f"epoch: {i}, clust: {clust_id}")
-
-        from_false_indeces = tf.random.uniform((len(train_edges),), maxval = n_nodes, dtype=tf.dtypes.int32)
-        to_false_indeces = tf.random.uniform((len(train_edges),), maxval = n_nodes, dtype=tf.dtypes.int32)
-
-        edges = from_false_indeces * n_nodes + to_false_indeces
-
-        train_false_edges_indeces =  edges[tf.gather(train_y, edges) == 0]
-
-        train_y_pos_edges = tf.convert_to_tensor([1.0]*len(train_edges))
-        train_y_neg_edges = tf.convert_to_tensor([0.0]*train_false_edges_indeces.shape[0])
-
-        tmp_train_y = tf.concat([train_y_pos_edges, train_y_neg_edges], 0)
 
         with tf.GradientTape() as tape:
             # forward pass
-            train_pred, mu, logvar = model(feature_tensor, training=True)
+            embs = model(feature_tensor, training=True)
             
+            train_pred = tf.reshape(tf.matmul(embs, embs, transpose_b = True), flatten_shape)
+            
+            print(train_pred.shape)
+            print(n_nodes, n_nodes * n_nodes)
+
             train_pos_pred = tf.gather(train_pred, train_edges_indeces)
             train_neg_pred = tf.gather(train_pred, train_false_edges_indeces)
 
@@ -96,7 +103,7 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
 
             #y_actual, y_pred, mu, logvar, n_nodes
             # get loss
-            loss = total_loss(tmp_train_y, train_pred, logvar, mu, n_nodes, top_loss_norm)
+            loss = topological_loss(tmp_train_y, train_pred)
 
             # get acc
             ta = tf.keras.metrics.Accuracy()
@@ -118,7 +125,8 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
         grad = None
         train_pred = None
 
-        valid_pred, mu, logvar = model(feature_tensor, training=False)
+        embs = model(feature_tensor, training=False)
+        valid_pred = tf.reshape(tf.matmul(embs, embs, transpose_b = True), flatten_shape)
 
         valid_pred_p = tf.gather(valid_pred, valid_edges_indeces)
         valid_pred_n = tf.gather(valid_pred, valid_false_edges_indeces)
@@ -128,7 +136,7 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
         valid_y = [1]*len(valid_edges) + [0]*len(valid_false_edges)
         valid_y = tf.convert_to_tensor(valid_y, dtype=tf.float32)
       
-        valid_loss = total_loss(valid_y, valid_pred, logvar, mu, n_nodes, top_loss_norm)
+        valid_loss = topological_loss(valid_y, valid_pred)
 
         va = tf.keras.metrics.Accuracy()
         va.update_state(valid_y, tf.round(tf.nn.sigmoid(valid_pred)))
@@ -152,7 +160,11 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
     plot(train_losses, valid_losses, "loss", clust_id)
     plot(train_accs, valid_accs, "acc", clust_id)
 
+    with open("plots/n_epochs.txt", "a") as fout:
+        fout.write(f"clust_{clust_id}, {DATASET_NAME}, {n_epochs}\n")
+
     return model
+
 
 def plot(train, valid, name, clust_id):
     plt.clf()

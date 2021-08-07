@@ -83,18 +83,18 @@ def get_test_edges(adj, test_size=0.1, train_size=0.15):
 
     
 # load data: adj_complete, features, labels, num of classes
-def load_data(dataset_name):
+def load_data(dataset_name, get_couples = False):
 
     if(dataset_name == "cora"):
         return load_cora_data()
     elif(dataset_name == "pubmed" or dataset_name == "pubmed_leave_intra_clust"):
-        return load_pubmed_data()
+        return load_pubmed_data(get_couples = get_couples)
     elif dataset_name == "amazon_electronics_computers":
-        return load_amazon_electronics_computers_data()
+        return load_amazon_electronics_computers_data(get_couples = get_couples)
     elif dataset_name == "amazon_electronics_photo":
-        return load_amazon_electronics_computers_data(is_photos=True)
+        return load_amazon_electronics_computers_data(is_photos=True, get_couples = get_couples)
     elif dataset_name == "fb":
-        return load_fb_data()
+        return load_fb_data(get_couples = get_couples)
     else:
         raise NotImplementedError
 
@@ -107,10 +107,11 @@ def load_edges(file_name):
     return edges.astype(np.int)
     
 
-def load_pubmed_data(sparsest_cut = False):
+def load_pubmed_data(sparsest_cut = False, get_couples = False):
     folder = "pubmed" if sparsest_cut == False else "pubmed_sparsest_cut"
     data = sio.loadmat(f'data/{folder}/pubmed.mat')
     adj_complete = data['W'].toarray()
+    all_features = data['fea']
     
     res_edges = load_edges(f"data/{folder}/res_edges.csv")
     adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_complete.shape)
@@ -123,10 +124,12 @@ def load_pubmed_data(sparsest_cut = False):
 
     adj_complete = adj_complete.toarray()
 
+
     # some values have a self loop, I remove it
     for i in range(adj_complete.shape[0]):
         adj_complete[i,i] = 0
     
+    com_idx_to_clust_idx = {}
     node_to_clust = {}
     clust_to_node = {}
     with open(f"data/{folder}/labels_pubmed.csv", "r") as fin:
@@ -134,14 +137,24 @@ def load_pubmed_data(sparsest_cut = False):
             clust = int(line.strip())
             if(clust_to_node.get(clust) == None):
                 clust_to_node[clust] = []
+            
+            com_idx_to_clust_idx[i] = len(clust_to_node[clust])
+            
             clust_to_node[clust].append(i)
 
+
             node_to_clust[i] = clust
+
+    if get_couples:
+        return get_data_couples(all_features, adj_complete, test_matrix, valid_matrix, node_to_clust, clust_to_node, com_idx_to_clust_idx)
 
     clust_to_adj = {}
     for key in clust_to_node.keys():
         tmp_adj = adj_complete[clust_to_node[key],:]
         tmp_adj = tmp_adj[:,clust_to_node[key]]
+        tmp_adj = tmp_adj + tmp_adj.T
+        tmp_adj = np.triu(tmp_adj)
+        print("TRIUUUU")
         clust_to_adj[key] = sp.csr_matrix(tmp_adj)
     
     adj_complete = None
@@ -150,7 +163,9 @@ def load_pubmed_data(sparsest_cut = False):
     clust_to_test = {}
     for key in clust_to_node.keys():
         tmp_adj = test_matrix[clust_to_node[key],:]
-        tmp_adj = tmp_adj[:,clust_to_node[key]]        
+        tmp_adj = tmp_adj[:,clust_to_node[key]]       
+        tmp_adj = tmp_adj + tmp_adj.T
+        tmp_adj = np.triu(tmp_adj) 
         clust_to_test[key] = sp.csr_matrix(tmp_adj)
     test_matrix = None
 
@@ -159,17 +174,18 @@ def load_pubmed_data(sparsest_cut = False):
     for key in clust_to_node.keys():
         tmp_adj = valid_matrix[clust_to_node[key],:]
         tmp_adj = tmp_adj[:,clust_to_node[key]]
+        tmp_adj = tmp_adj + tmp_adj.T
+        tmp_adj = np.triu(tmp_adj)
         clust_to_valid[key] = sp.csr_matrix(tmp_adj)
     valid_matrix = None
 
-    all_features = data['fea']
     clust_to_features = {}
     for key in clust_to_node.keys():
         tmp_feat = all_features[clust_to_node[key],:]
         clust_to_features[key] = sp.csr_matrix(tmp_feat)
     
 
-    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust, com_idx_to_clust_idx
     
 
 def load_pred_labels(dataset_name):
@@ -321,24 +337,24 @@ def get_complete_pubmed_data(sparsest_cut = False, leave_intra_clust_edges = Fal
 
 
 
-def get_complete_data(dataset_name):
+def get_complete_data(dataset_name, leave_intra_clust_edges=False):
     if dataset_name == "pubmed":
-        return get_complete_pubmed_data()
+        return get_complete_pubmed_data(leave_intra_clust_edges=leave_intra_clust_edges)
     elif dataset_name == "cora":
         return get_complete_cora_data()
     elif dataset_name == "amazon_electronics_computers":
-        return get_complete_amazon_electronics_computers_data()
+        return get_complete_amazon_electronics_computers_data(leave_intra_clust_edges=leave_intra_clust_edges)
     elif dataset_name == "amazon_electronics_photo":
-        return get_complete_amazon_electronics_computers_data(is_photos=True)
+        return get_complete_amazon_electronics_computers_data(is_photos=True, leave_intra_clust_edges=leave_intra_clust_edges)
     elif dataset_name == "fb":
-        return get_complete_fb_data()
+        return get_complete_fb_data(leave_intra_clust_edges=leave_intra_clust_edges)
     else:
         raise Exception("unknown dataset")
 
 
 # is_photos = True: use photos dataset data
 # else use the computer one
-def get_complete_amazon_electronics_computers_data(is_photos = False):
+def get_complete_amazon_electronics_computers_data(is_photos = False, leave_intra_clust_edges = False):
     
     path = "amazon_electronics_photo" if is_photos else "amazon_electronics_computers"
     number_of_clusters = 2 if is_photos else 3
@@ -371,20 +387,24 @@ def get_complete_amazon_electronics_computers_data(is_photos = False):
     adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
     
     print("computing test matrix")
-    test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
-    test_edges = test_edges[test_edges_indeces]
+
+    if(not leave_intra_clust_edges): 
+        test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
+        test_edges = test_edges[test_edges_indeces]
     
     test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
     
     print("computing valid matrix")
-    valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
-    valid_edges = valid_edges[valid_edges_indeces]
+    if(not leave_intra_clust_edges): 
+        valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
+        valid_edges = valid_edges[valid_edges_indeces]
+    
     valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
 
 
     return adj_complete, all_features, test_matrix, valid_matrix
 
-def load_amazon_electronics_computers_data(is_photos = False):
+def load_amazon_electronics_computers_data(is_photos = False, get_couples = False):
 
     path = "amazon_electronics_photo" if is_photos else "amazon_electronics_computers"
     number_of_clusters = 2 if is_photos else 3
@@ -393,7 +413,7 @@ def load_amazon_electronics_computers_data(is_photos = False):
     data = from_flat_dict(data)
     
     adj_complete = data["adj_matrix"]
-
+    all_features = data['attr_matrix']
 
     res_edges = load_edges(f"data/{path}/{path}.npz_res_edges.csv")
     adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_complete.shape)
@@ -410,6 +430,7 @@ def load_amazon_electronics_computers_data(is_photos = False):
     for i in range(adj_complete.shape[0]):
         adj_complete[i,i] = 0
     
+    com_idx_to_clust_idx = {}
     node_to_clust = {}
     clust_to_node = {}
     with open(f"data/{path}/{number_of_clusters}/labels_{path}.npz.csv", "r") as fin:
@@ -417,14 +438,22 @@ def load_amazon_electronics_computers_data(is_photos = False):
             clust = int(line.strip())
             if(clust_to_node.get(clust) == None):
                 clust_to_node[clust] = []
+
+            com_idx_to_clust_idx[i] = len(clust_to_node[clust])
+            
             clust_to_node[clust].append(i)
 
             node_to_clust[i] = clust
+
+    if get_couples:
+        return get_data_couples(all_features, adj_complete, test_matrix, valid_matrix, node_to_clust, clust_to_node, com_idx_to_clust_idx)
 
     clust_to_adj = {}
     for key in clust_to_node.keys():
         tmp_adj = adj_complete[clust_to_node[key],:]
         tmp_adj = tmp_adj[:,clust_to_node[key]]
+        tmp_adj = tmp_adj + tmp_adj.T
+        tmp_adj = np.triu(tmp_adj)
         clust_to_adj[key] = sp.csr_matrix(tmp_adj)
     
     adj_complete = None
@@ -433,7 +462,9 @@ def load_amazon_electronics_computers_data(is_photos = False):
     clust_to_test = {}
     for key in clust_to_node.keys():
         tmp_adj = test_matrix[clust_to_node[key],:]
-        tmp_adj = tmp_adj[:,clust_to_node[key]]        
+        tmp_adj = tmp_adj[:,clust_to_node[key]]  
+        tmp_adj = tmp_adj + tmp_adj.T
+        tmp_adj = np.triu(tmp_adj)      
         clust_to_test[key] = sp.csr_matrix(tmp_adj)
     test_matrix = None
 
@@ -442,6 +473,8 @@ def load_amazon_electronics_computers_data(is_photos = False):
     for key in clust_to_node.keys():
         tmp_adj = valid_matrix[clust_to_node[key],:]
         tmp_adj = tmp_adj[:,clust_to_node[key]]
+        tmp_adj = tmp_adj + tmp_adj.T
+        tmp_adj = np.triu(tmp_adj)
         clust_to_valid[key] = sp.csr_matrix(tmp_adj)
     valid_matrix = None
 
@@ -452,7 +485,7 @@ def load_amazon_electronics_computers_data(is_photos = False):
         clust_to_features[key] = sp.csr_matrix(tmp_feat)
     
 
-    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust, com_idx_to_clust_idx
 
 
 def load_musae_features(path):
@@ -480,7 +513,7 @@ def load_musae_features(path):
 
     return feat
 
-def get_complete_fb_data():
+def get_complete_fb_data(leave_intra_clust_edges = False):
     
     print("load edges")
     res_edges = load_edges("data/fb/fb_res_edges.csv")
@@ -505,14 +538,16 @@ def get_complete_fb_data():
     adj_complete = sp.csr_matrix((np.ones(res_edges.shape[0]), (res_edges[:, 0], res_edges[:, 1])), shape=adj_shape)
     
     print("computing test matrix")
-    test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
-    test_edges = test_edges[test_edges_indeces]
+    if(not leave_intra_clust_edges): 
+        test_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in test_edges]
+        test_edges = test_edges[test_edges_indeces]
     
     test_matrix = sp.csr_matrix((np.ones(test_edges.shape[0]), (test_edges[:, 0], test_edges[:, 1])), shape=adj_shape)
     
     print("computing valid matrix")
-    valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
-    valid_edges = valid_edges[valid_edges_indeces]
+    if(not leave_intra_clust_edges): 
+        valid_edges_indeces = [node_to_clust[int(x[0])] == node_to_clust[int(x[1])] for x in valid_edges]
+        valid_edges = valid_edges[valid_edges_indeces]
     valid_matrix = sp.csr_matrix((np.ones(valid_edges.shape[0]), (valid_edges[:, 0], valid_edges[:, 1])), shape=adj_shape)
     
     feat_file = "data/fb/musae_facebook_features.json"
@@ -521,7 +556,7 @@ def get_complete_fb_data():
     
     return adj_complete, feat, test_matrix, valid_matrix
 
-def load_fb_data():
+def load_fb_data(get_couples=False):
 
     feat_file = "data/fb/musae_facebook_features.json"
 
@@ -544,6 +579,8 @@ def load_fb_data():
     for i in range(n_nodes):
         adj_complete[i,i] = 0
     
+    com_idx_to_clust_idx = {}
+
     node_to_clust = {}
     clust_to_node = {}
     with open(f"data/fb/3/labels_fb.csv", "r") as fin:
@@ -551,14 +588,22 @@ def load_fb_data():
             clust = int(line.strip())
             if(clust_to_node.get(clust) == None):
                 clust_to_node[clust] = []
+
+            com_idx_to_clust_idx[i] = len(clust_to_node[clust])
+                
             clust_to_node[clust].append(i)
 
             node_to_clust[i] = clust
+
+    if get_couples:
+        return get_data_couples(all_features, adj_complete, test_matrix, valid_matrix, node_to_clust, clust_to_node, com_idx_to_clust_idx)
 
     clust_to_adj = {}
     for key in clust_to_node.keys():
         tmp_adj = adj_complete[clust_to_node[key],:]
         tmp_adj = tmp_adj[:,clust_to_node[key]]
+        tmp_adj = tmp_adj + tmp_adj.T
+        tmp_adj = np.triu(tmp_adj)
         clust_to_adj[key] = sp.csr_matrix(tmp_adj)
     
     adj_complete = None
@@ -568,6 +613,8 @@ def load_fb_data():
     for key in clust_to_node.keys():
         tmp_adj = test_matrix[clust_to_node[key],:]
         tmp_adj = tmp_adj[:,clust_to_node[key]]        
+        tmp_adj = tmp_adj + tmp_adj.T
+        tmp_adj = np.triu(tmp_adj)
         clust_to_test[key] = sp.csr_matrix(tmp_adj)
     test_matrix = None
 
@@ -576,6 +623,8 @@ def load_fb_data():
     for key in clust_to_node.keys():
         tmp_adj = valid_matrix[clust_to_node[key],:]
         tmp_adj = tmp_adj[:,clust_to_node[key]]
+        tmp_adj = tmp_adj + tmp_adj.T
+        tmp_adj = np.triu(tmp_adj)
         clust_to_valid[key] = sp.csr_matrix(tmp_adj)
     valid_matrix = None
 
@@ -586,4 +635,64 @@ def load_fb_data():
         clust_to_features[key] = sp.csr_matrix(tmp_feat)
     
 
-    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, clust_to_node, node_to_clust, com_idx_to_clust_idx
+
+def get_data_couples(all_features, train_matrix, test_matrix, valid_matrix, node_to_clust, clust_to_node, com_idx_to_clust_idx):
+    couple_clust_to_node = {}
+    clust_to_adj = {}
+    clust_to_features = {}
+    clust_to_test = {}
+    clust_to_valid = {}
+
+    # map the clusters so that the smaller ones are at the beginning
+    # so that the couples will be smaller
+    sizes = np.array([len(clust_to_node[i]) for i in range(len(clust_to_node))])
+    sorted = np.argsort(sizes).tolist()
+
+    new_node_to_clust = {}
+    for node in node_to_clust.keys():
+        old_clust = node_to_clust[node]
+        new_clust = sorted.index(old_clust)
+
+        new_node_to_clust[node] = new_clust
+
+    node_to_clust = new_node_to_clust
+
+    new_clust_to_node = {}
+    for old_clust in clust_to_node.keys():
+        new_clust = sorted.index(old_clust)
+        new_clust_to_node[new_clust] = clust_to_node[old_clust]
+
+    clust_to_node = new_clust_to_node
+
+    counter = 0
+
+    for clust_1 in range(len(clust_to_node.keys())):
+        for clust_2 in range(clust_1+1, len(clust_to_node.keys())):
+            nodes = clust_to_node[clust_1] + clust_to_node[clust_2] 
+            
+            couple_features = sp.csr_matrix(all_features[nodes, :])
+            
+            couple_train = train_matrix[nodes, :][:, nodes]
+            couple_train = np.triu(couple_train + couple_train.T)
+            couple_train = sp.csr_matrix(couple_train)
+
+            couple_test  = test_matrix.toarray()[nodes, :][:, nodes]
+            couple_test = np.triu(couple_test + couple_test.T)
+            couple_test = sp.csr_matrix(couple_test)
+
+
+            couple_valid = valid_matrix.toarray()[nodes, :][:, nodes]
+            couple_valid = np.triu(couple_valid + couple_valid.T)
+            couple_valid = sp.csr_matrix(couple_valid)
+
+            couple_clust_to_node[counter] = nodes
+            
+            clust_to_adj[counter] = couple_train
+            clust_to_test[counter] = couple_test 
+            clust_to_valid[counter] = couple_valid 
+            clust_to_features[counter] = couple_features
+
+            counter += 1
+
+    return clust_to_adj, clust_to_features, clust_to_test, clust_to_valid, couple_clust_to_node, node_to_clust, com_idx_to_clust_idx

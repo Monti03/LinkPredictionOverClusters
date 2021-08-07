@@ -5,6 +5,8 @@ import math
 import random
 from re import L
 
+
+import itertools
 import time
 
 import concurrent
@@ -28,7 +30,9 @@ from tensorflow.python.keras.utils.tf_utils import convert_inner_node_data
 from constants import *
 from data import load_data, get_test_edges, get_false_edges, sparse_to_tuple, get_complete_cora_data, get_complete_data
 from metrics import clustering_metrics
-from shared_model import LastShared, FirstShared    
+from multiple_models import MultipleModels    
+from between_cluster_fc import BetweenClusterFC
+
 from loss import total_loss, topological_loss
 
 # set the seed
@@ -62,12 +66,11 @@ def comp_idxs_to_clusts_idxs_multi_thread(edges, node_to_clust, clust_to_node, c
 
     converted_edges_list = [executor.submit(comp_idxs_to_clusts_idxs, batches[i], node_to_clust, clust_to_node, com_idx_to_clust_idx) for i in range(8)]
     res = concurrent.futures.wait(converted_edges_list)
-    print(res)
     converted_edges = []
+
     for i in range(8):
-        print(converted_edges_list.__class__)
         converted_edges += converted_edges_list[i].result()
-        pass
+
     return np.array(converted_edges)
 
 def comp_idxs_to_clusts_idxs(edges, node_to_clust, clust_to_node, com_idx_to_clust_idx):
@@ -77,6 +80,8 @@ def comp_idxs_to_clusts_idxs(edges, node_to_clust, clust_to_node, com_idx_to_clu
         comp_idx_from, comp_idx_to = edge[0], edge[1]
         
         from_clust, to_clust = node_to_clust[comp_idx_from], node_to_clust[comp_idx_to]
+
+        #clust_idx_from, clust_idx_to = clust_to_node[from_clust].index(comp_idx_from), clust_to_node[to_clust].index(comp_idx_to)
 
         clust_idx_from, clust_idx_to = com_idx_to_clust_idx[comp_idx_from], com_idx_to_clust_idx[comp_idx_to]
 
@@ -89,7 +94,7 @@ def comp_idxs_to_clusts_idxs(edges, node_to_clust, clust_to_node, com_idx_to_clu
 
     return converted_edges
 
-def train_preds(embs_from, embs_to, tmp_train_edges):
+def train_preds(embs_from, embs_to, tmp_train_edges, between_cluster_fc=None, cluster_1=None, cluster_2=None):
     # get the train edges of this batch
     tmp_from = tmp_train_edges[:,0]
     tmp_to = tmp_train_edges[:,1]
@@ -99,11 +104,15 @@ def train_preds(embs_from, embs_to, tmp_train_edges):
     embs_to_ = tf.gather(embs_to, tmp_to)
 
     # obtain the logits by a scalar product of the embs of the two nodes of the corresponding edge
-    train_pos_pred = tf.linalg.diag_part(tf.matmul(embs_from_, embs_to_, transpose_b=True))
+    if(USE_FCS):
+        assert between_cluster_fc is not None and cluster_1 is not None and cluster_2 is not None
+        train_pos_pred = between_cluster_fc(embs_from_, embs_to_,cluster_1, cluster_2)
+    else:
+        train_pos_pred = tf.linalg.diag_part(tf.matmul(embs_from_, embs_to_, transpose_b=True))
     
     return train_pos_pred
 
-def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid_edges, valid_false_edges, intra_train_edges, intra_valid_edges, intra_valid_false_edges, complete_adj, share_first, clust_to_node, com_idx_to_clust_idx, node_to_clust=None):
+def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid_edges, valid_false_edges, between_train_edges, between_valid_edges, between_valid_false_edges, complete_adj, clust_to_node, com_idx_to_clust_idx, node_to_clust=None):
     train_accs = []
     train_losses = []
 
@@ -127,29 +136,28 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
     adj_train_norm_tensor = [convert_sparse_matrix_to_sparse_tensor(adj_train_norm) for adj_train_norm in adj_train_norm_list]
     feature_tensor = [convert_sparse_matrix_to_sparse_tensor(features) for features in features_list]
 
-    # initialize the model    
-    if share_first:
-        model = FirstShared(adj_train_norm_tensor)
-    else:
-        model = LastShared(adj_train_norm_tensor)
+    model = MultipleModels(adj_train_norm_tensor)
     
+    if(USE_FCS):
+        between_cluster_fc = BetweenClusterFC(len(adj_train_list))
+
     # flatten the matrix edges
-    valid_edges_indeces = [[x[0]*n_nodes[cluster] + x[1] for x in valid_edges[cluster]] for cluster in range(n_clusters)]
-    valid_false_edges_indeces = [[x[0]*n_nodes[cluster] + x[1] for x in valid_false_edges[cluster]] for cluster in range(n_clusters)]
+    #valid_edges_indeces = [[x[0]*n_nodes[cluster] + x[1] for x in valid_edges[cluster]] for cluster in range(n_clusters)]
+    #valid_false_edges_indeces = [[x[0]*n_nodes[cluster] + x[1] for x in valid_false_edges[cluster]] for cluster in range(n_clusters)]
 
-    intra_valid_edges = comp_idxs_to_clusts_idxs_multi_thread(intra_valid_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
-    intra_valid_false_edges = comp_idxs_to_clusts_idxs_multi_thread(intra_valid_false_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
+    between_valid_edges = comp_idxs_to_clusts_idxs_multi_thread(between_valid_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
+    between_valid_false_edges = comp_idxs_to_clusts_idxs_multi_thread(between_valid_false_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
     
 
-    print(f"valid_edges_indeces: {[len(i) for i in valid_edges_indeces]}")
-    print(f"valid_false_edges_indeces: {[len(i) for i in valid_false_edges_indeces]}")
+    #print(f"valid_edges_indeces: {[len(i) for i in valid_edges_indeces]}")
+    #print(f"valid_false_edges_indeces: {[len(i) for i in valid_false_edges_indeces]}")
 
     # get random false edges to train
     train_false_edges = [get_false_edges(adj_train_list[cluster], len(train_edges[cluster]), node_to_clust=node_to_clust) for cluster in range(n_clusters)]
-    intra_train_false_edges = get_false_edges(complete_adj, intra_train_edges.shape[0], node_to_clust=None)
+    between_train_false_edges = get_false_edges(complete_adj, between_train_edges.shape[0], node_to_clust=None)
 
-    intra_train_false_edges = comp_idxs_to_clusts_idxs_multi_thread(intra_train_false_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
-    intra_train_edges = comp_idxs_to_clusts_idxs_multi_thread(intra_train_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
+    between_train_false_edges = comp_idxs_to_clusts_idxs_multi_thread(between_train_false_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
+    between_train_edges = comp_idxs_to_clusts_idxs_multi_thread(between_train_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
 
 
     print("train_false_edges", [clust_false_edges.shape[0] for clust_false_edges in train_false_edges])
@@ -165,13 +173,9 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
         max_batches = max([len(edges) for edges in train_edges]) // batch_size + 1
 
         batch_sizes = [len(edges)//max_batches for edges in train_edges]
-        intra_batch_size = intra_train_edges.shape[0]//max_batches
+        between_batch_size = between_train_edges.shape[0]//max_batches
 
         print("batch sizes", batch_sizes)
-
-        # shuffle data in order to have different batches in different epochs
-        #train_edges = [np.random.shuffle(clust_train_edges) for clust_train_edges in train_edges]
-        #train_false_edges = [np.random.shuffle(clust_train_false_edges) for clust_train_false_edges in train_false_edges]
 
         for i in range(max_batches):
 
@@ -244,8 +248,8 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
 
                 
 
-                tmp_train_edges = intra_train_edges[i * intra_batch_size: (i+1) * intra_batch_size]
-                tmp_train_false_edges = intra_train_false_edges[i * intra_batch_size: (i+1) * intra_batch_size]
+                tmp_train_edges = between_train_edges[i * between_batch_size: (i+1) * between_batch_size]
+                tmp_train_false_edges = between_train_false_edges[i * between_batch_size: (i+1) * between_batch_size]
                 
                 for cluster_1 in range(n_clusters):
                     for cluster_2 in range(cluster_1+1, n_clusters):
@@ -268,7 +272,10 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
                             embs_to_ = tf.gather(embs_list[cluster_2], tmp_to)
 
                             # obtain the logits by a scalar product of the embs of the two nodes of the corresponding edge
-                            train_pos_pred = tf.linalg.diag_part(tf.matmul(embs_from_, embs_to_, transpose_b=True))
+                            if(USE_FCS):
+                                train_pos_pred = between_cluster_fc(embs_from_, embs_to_, cluster_1, cluster_2)
+                            else:
+                                train_pos_pred = tf.linalg.diag_part(tf.matmul(embs_from_, embs_to_, transpose_b=True))
 
                         tmp_train_edges_1 = tmp_train_false_edges[:,2]==cluster_1
                         tmp_train_edges_2 = tmp_train_false_edges[:,3]==cluster_2
@@ -287,7 +294,10 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
                             embs_to_ = tf.gather(embs_list[cluster_2], tmp_to)
 
                             # obtain the logits by a scalar product of the embs of the two nodes of the corresponding edge
-                            train_neg_pred = tf.linalg.diag_part(tf.matmul(embs_from_, embs_to_, transpose_b=True))
+                            if(USE_FCS):
+                                train_neg_pred = between_cluster_fc(embs_from_, embs_to_, cluster_1, cluster_2)
+                            else:
+                                train_neg_pred = tf.linalg.diag_part(tf.matmul(embs_from_, embs_to_, transpose_b=True))
                             
 
                         clust_train_pred = None
@@ -321,7 +331,10 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
                 loss = topological_loss(tmp_train_y, train_pred)
                 #loss = tf.reduce_mean(clusts_loss)
                 # get gradient from loss 
-                grad = tape.gradient(loss, model.trainable_variables)
+                if(USE_FCS):
+                    grad = tape.gradient(loss, model.trainable_variables + between_cluster_fc.trainable_variables)
+                else:
+                    grad = tape.gradient(loss, model.trainable_variables)
 
             # get acc
             ta = tf.keras.metrics.Accuracy()
@@ -331,7 +344,11 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
             print("batch train_acc:", train_acc)
 
             # optimize the weights
-            optimizer.apply_gradients(zip(grad, model.trainable_variables))
+            if USE_FCS:
+                optimizer.apply_gradients(zip(grad, model.trainable_variables + between_cluster_fc.trainable_variables))
+            else:
+                optimizer.apply_gradients(zip(grad, model.trainable_variables))
+
 
             epoch_losses.append(loss.numpy())
             epoch_accs.append(train_acc)
@@ -412,28 +429,35 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
             for cluster_2 in range(cluster_1+1, n_clusters):
                 embs_from, embs_to = embs_list[cluster_1], embs_list[cluster_2] 
 
-                tmp_valid_edges_1 = intra_valid_edges[:,2]==cluster_1
-                tmp_valid_edges_2 = intra_valid_edges[:,3]==cluster_2
+                tmp_valid_edges_1 = between_valid_edges[:,2]==cluster_1
+                tmp_valid_edges_2 = between_valid_edges[:,3]==cluster_2
                 tmp_valid_edges_1_2 = tmp_valid_edges_1 * tmp_valid_edges_2
 
                 # get the right edges from clust1 to clust2
-                tmp_valid_edges_1_2 = intra_valid_edges[tmp_valid_edges_1_2]
+                tmp_valid_edges_1_2 = between_valid_edges[tmp_valid_edges_1_2]
                 
                 valid_pos_pred = None
                 if(tmp_valid_edges_1_2.shape[0] > 0):
-                    valid_pos_pred = train_preds(embs_list[cluster_1], embs_list[cluster_2], tmp_valid_edges_1_2)
+                    if USE_FCS:
+                        valid_pos_pred = train_preds(embs_list[cluster_1], embs_list[cluster_2], tmp_valid_edges_1_2, between_cluster_fc=between_cluster_fc, cluster_1=cluster_1, cluster_2=cluster_2)
+                    else:    
+                        valid_pos_pred = train_preds(embs_list[cluster_1], embs_list[cluster_2], tmp_valid_edges_1_2)
 
-                tmp_valid_edges_1 = intra_valid_false_edges[:,2]==cluster_1
-                tmp_valid_edges_2 = intra_valid_false_edges[:,3]==cluster_2
+                tmp_valid_edges_1 = between_valid_false_edges[:,2]==cluster_1
+                tmp_valid_edges_2 = between_valid_false_edges[:,3]==cluster_2
                 tmp_valid_edges_1_2 = tmp_valid_edges_1 * tmp_valid_edges_2
 
                 # get the right edges from clust1 to clust2
-                tmp_valid_edges_1_2 = intra_valid_false_edges[tmp_valid_edges_1_2]
+                tmp_valid_edges_1_2 = between_valid_false_edges[tmp_valid_edges_1_2]
                 
                 valid_neg_pred = None
                 if(tmp_valid_edges_1_2.shape[0] > 0):
-                    valid_neg_pred = train_preds(embs_list[cluster_1], embs_list[cluster_2], tmp_valid_edges_1_2)
-                
+                    
+                    if USE_FCS:
+                        valid_neg_pred = train_preds(embs_list[cluster_1], embs_list[cluster_2], tmp_valid_edges_1_2, between_cluster_fc=between_cluster_fc, cluster_1=cluster_1, cluster_2=cluster_2)
+                    else:    
+                        valid_neg_pred = train_preds(embs_list[cluster_1], embs_list[cluster_2], tmp_valid_edges_1_2)
+
                 clust_valid_pred = None
                 clust_tmp_valid_y = None
                 if(valid_neg_pred is not None and train_pos_pred is not None):
@@ -496,7 +520,8 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
             break
         print("#"*20)
 
-    model_name  = "first" if share_first else "last"
+
+    model_name = "multiple_models_between_as_product"
 
     plot(train_losses, valid_losses, "loss", f"shared_{model_name}")
     plot(train_accs, valid_accs, "acc", f"shared_{model_name}")
@@ -504,6 +529,8 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
     with open("plots/n_epochs.txt", "a") as fout:
         fout.write(f"{model_name}, {DATASET_NAME}, {n_epochs}\n")
 
+    if USE_FCS:
+        return model, between_cluster_fc
     return model
 
 def plot(train, valid, name, clust_id):
@@ -516,9 +543,11 @@ def plot(train, valid, name, clust_id):
     plt.savefig(f"plots/{name}_{clust_id}.png")
 
 
-def get_preds(embs, edges_pos, edges_neg, embs_1=None):
+def get_preds(embs, edges_pos, edges_neg, embs_1=None, cluster_1=None, cluster_2=None, between_cluster_fc=None):
     
+    use_fcs_condition = USE_FCS and embs_1 is not None
     embs_1 = embs if embs_1 is None else embs_1
+
 
     valid_pred_p=None
     for i in range(0, len(edges_pos), BATCH_SIZE):
@@ -528,10 +557,19 @@ def get_preds(embs, edges_pos, edges_neg, embs_1=None):
 
         embs_from = tf.gather(embs, tmp_from)
         embs_to = tf.gather(embs_1, tmp_to)
-        if(valid_pred_p is None):
-            valid_pred_p = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
+        if use_fcs_condition:
+            assert cluster_1 is not None and cluster_2 is not None and between_cluster_fc is not None
+            if cluster_2 > cluster_1:
+                batch_logits= between_cluster_fc(embs_from, embs_to, cluster_1, cluster_2)
+            else:
+                batch_logits= between_cluster_fc(embs_to, embs_from, cluster_2, cluster_1)
+
         else:
-            batch_logits = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
+            batch_logits=tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
+
+        if(valid_pred_p is None):
+            valid_pred_p = batch_logits
+        else:
             valid_pred_p = tf.concat((valid_pred_p, batch_logits), -1)
     
     valid_pred_n = None
@@ -542,10 +580,21 @@ def get_preds(embs, edges_pos, edges_neg, embs_1=None):
 
         embs_from = tf.gather(embs, tmp_from)
         embs_to = tf.gather(embs_1, tmp_to)
-        if(valid_pred_n is None):
-            valid_pred_n = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
+
+        if use_fcs_condition:
+            assert cluster_1 is not None and cluster_2 is not None and between_cluster_fc is not None
+            if cluster_2 > cluster_1:
+                batch_logits= between_cluster_fc(embs_from, embs_to, cluster_1, cluster_2)
+            else:
+                batch_logits= between_cluster_fc(embs_to, embs_from, cluster_2, cluster_1)
+
         else:
-            batch_logits = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
+            batch_logits=tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
+
+        if(valid_pred_n is None):
+            valid_pred_n = batch_logits
+        else:
+            batch_logits = batch_logits
             valid_pred_n = tf.concat((valid_pred_n, batch_logits), -1)
 
     preds_all = tf.concat([valid_pred_p, valid_pred_n], 0)
@@ -598,7 +647,7 @@ def roc_curve_plot(testy, y_pred, roc_score, dataset, clust):
 
 
 # test_p: [[from, to, clust_from, clust_to]]
-def test_in_between_edges(features_list, model, test_p, test_n, dataset, model_name):
+def test_in_between_edges(features_list, model, test_p, test_n, dataset, model_name, between_cluster_fc=None):
 
     features = [convert_sparse_matrix_to_sparse_tensor(features) for features in features_list]
 
@@ -619,8 +668,11 @@ def test_in_between_edges(features_list, model, test_p, test_n, dataset, model_n
             test_n_clust_1 = test_n[test_n[:, 2] == clust_1]
             test_n_clust_1_2 = test_n_clust_1[test_n_clust_1[:, 3] == clust_2]
             test_n_clust_1_2 = test_n_clust_1_2[:, 0:2]
-                        
-            preds, labels = get_preds(embs_list[clust_1], test_p_clust_1_2, test_n_clust_1_2, embs_1=embs_list[clust_2])
+
+            if USE_FCS:
+                preds, labels = get_preds(embs_list[clust_1], test_p_clust_1_2, test_n_clust_1_2, embs_1=embs_list[clust_2], cluster_1=clust_1, cluster_2=clust_2, between_cluster_fc = between_cluster_fc)
+            else:
+                preds, labels = get_preds(embs_list[clust_1], test_p_clust_1_2, test_n_clust_1_2, embs_1=embs_list[clust_2])
 
             if(labels_all is None):
                 preds_all = preds
@@ -629,7 +681,7 @@ def test_in_between_edges(features_list, model, test_p, test_n, dataset, model_n
                 preds_all = tf.concat([preds_all, preds], 0)
                 labels_all = np.hstack([labels_all, labels])
 
-    auc, ap, cms = get_scores(labels_all, preds_all, dataset, f"{model_name}_intra_clust")
+    auc, ap, cms = get_scores(labels_all, preds_all, dataset, f"{model_name}_between_clust")
 
     return ap, auc, cms
 
@@ -705,11 +757,11 @@ def complete_graph(node_to_clust):
     start_time = time.time()
     
     # start training
-    model = complete_train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust, node_to_clust=node_to_clust)
+    #model = complete_train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust, node_to_clust=node_to_clust)
 
     execution_time = time.time() - start_time
 
-    model.save_weights(f"weights/{DATASET_NAME}_{clust}")
+    #model.save_weights(f"weights/{DATASET_NAME}_{clust}")
 
     test_ap, test_auc = 0, 0
 
@@ -720,9 +772,9 @@ def complete_graph(node_to_clust):
     diff_clust_false_test = list(map(lambda x: not x, same_clust_false_test))
 
 
-    _, _ = complete_test(features, model, test_edges[same_clust_test], test_false_edges[same_clust_false_test], DATASET_NAME, clust+"_same_clust")
-    _, _ = complete_test(features, model, test_edges[diff_clust_test], test_false_edges[diff_clust_false_test], DATASET_NAME, clust+"_intra_clust")
-    test_ap, test_auc = complete_test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
+    #_, _ = complete_test(features, model, test_edges[same_clust_test], test_false_edges[same_clust_false_test], DATASET_NAME, clust+"_same_clust")
+    #_, _ = complete_test(features, model, test_edges[diff_clust_test], test_false_edges[diff_clust_false_test], DATASET_NAME, clust+"_between_clust")
+    #test_ap, test_auc = complete_test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
 
     
     test_ones = [1]*test_false_edges.shape[0]
@@ -733,12 +785,12 @@ def complete_graph(node_to_clust):
 
     return test_false_matrix, valid_false_matrix, test_ap, test_auc, execution_time
 
-def get_intra_edges(matrix, clust_to_node):
-    print("start get_intra_edges")
+def get_between_edges(matrix, clust_to_node):
+    print("start get_between_edges")
     n_clusters = len(clust_to_node.keys())
     
 
-    intra_matrix = sp.csr_matrix(matrix.shape)
+    between_matrix = sp.csr_matrix(matrix.shape)
     for i in range(n_clusters):
         in_clust = clust_to_node[i]
 
@@ -761,20 +813,29 @@ def get_intra_edges(matrix, clust_to_node):
 
         tmp_matrix[in_clust_0, in_clust_1] = 0
 
-        intra_matrix[in_clust, :] = tmp_matrix[in_clust, :]
-        intra_matrix[:, in_clust] = tmp_matrix[:, in_clust]
-    print("end get_intra_edges")
+        between_matrix[in_clust, :] = tmp_matrix[in_clust, :]
+        between_matrix[:, in_clust] = tmp_matrix[:, in_clust]
+    print("end get_between_edges")
     
-    return intra_matrix
+    return between_matrix
 
 if __name__ == "__main__":
     
     # load data : adj, features, node labels and number of clusters
-    adjs, features_, tests, valids, clust_to_node, node_to_clust, com_idx_to_clust_idx = load_data(DATASET_NAME)
+    data = load_data(DATASET_NAME)
 
+    adjs = data[0]
+    features_ = data[1]
+    
     # turn the dictionary into a list of features
     features_ = [features_[i] for i in range(len(features_))]
 
+    tests = data[2]
+    valids = data[3]
+    clust_to_node = data[4]
+    node_to_clust = data[5]
+    com_idx_to_clust_idx = data[6]
+    
     # train the complete graph in order to compare the results
     # get also the test false edges
     test_false_matrix, valid_false_matrix, test_ap, test_auc, execution_time = complete_graph(node_to_clust)
@@ -786,8 +847,8 @@ if __name__ == "__main__":
     test_aucs = [test_auc]
     execution_times = [execution_time]
 
-    test_intra_cluster_aps = []
-    test_intra_cluster_aucs = []
+    test_between_cluster_aps = []
+    test_between_cluster_aucs = []
 
     subset_lenghts = []
     
@@ -835,112 +896,113 @@ if __name__ == "__main__":
         test_false_edges_list.append(test_false_edges)
         valid_false_edges_list.append(valid_false_edges)
 
-    for share_first in [True, False]:
-        
-        adj_train, _, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
+    # train and test
+    adj_train, _, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
 
-        intra_train_matrix = get_intra_edges(adj_train, clust_to_node)
-        intra_valid_matrix = get_intra_edges(valid_matrix, clust_to_node)
+    between_train_matrix = get_between_edges(adj_train, clust_to_node)
+    between_valid_matrix = get_between_edges(valid_matrix, clust_to_node)
 
-        intra_train_edges, _, _ = sparse_to_tuple(intra_train_matrix)
-        intra_valid_edges, _, _ = sparse_to_tuple(intra_valid_matrix)
-        intra_valid_false_edges, _, _ = sparse_to_tuple(valid_false_matrix)
-    
+    between_train_edges, _, _ = sparse_to_tuple(between_train_matrix)
+    between_valid_edges, _, _ = sparse_to_tuple(between_valid_matrix)
+    between_valid_false_edges, _, _ = sparse_to_tuple(valid_false_matrix)
 
-        start_time = time.time()
-        #model = train(features_, adj_train_list, adj_train_norm_list, train_edges_list, valid_edges_list, valid_false_edges_list, share_first, node_to_clust=None)
+
+    start_time = time.time()
+    if USE_FCS:
+        model, between_cluster_fc = train(features_, adj_train_list, adj_train_norm_list, train_edges_list, valid_edges_list, valid_false_edges_list, 
+                    between_train_edges, between_valid_edges, between_valid_false_edges, adj_train, clust_to_node, com_idx_to_clust_idx, node_to_clust=node_to_clust)
+    else:
         model = train(features_, adj_train_list, adj_train_norm_list, train_edges_list, valid_edges_list, valid_false_edges_list, 
-                        intra_train_edges, intra_valid_edges, intra_valid_false_edges, adj_train, share_first, clust_to_node, com_idx_to_clust_idx, node_to_clust=node_to_clust)
+                    between_train_edges, between_valid_edges, between_valid_false_edges, adj_train, clust_to_node, com_idx_to_clust_idx, node_to_clust=node_to_clust)
+    
+    execution_times.append(time.time()-start_time)
+
+    model_name = "multiple_models_between_as_product"
+
+    test_ap, test_auc, cms_inside = test(features_, model, test_edges_list, test_false_edges_list, DATASET_NAME, f"{model_name}")
+    
+    test_aps.append(test_ap)
+    test_aucs.append(test_auc)
+
+    if(LEAVE_INTRA_CLUSTERS):
+
+        clust_idxs = []
+        for i in range(adj_train.shape[0]):
+            clust = node_to_clust[i]
+            clust_nodes = clust_to_node[clust]
+
+            clust_idx = clust_nodes.index(i)
+            clust_idxs.append(clust_idx)
         
-        execution_times.append(time.time()-start_time)
-
-        model_name = "first" if share_first else "last"
-
-        test_ap, test_auc, cms_inside = test(features_, model, test_edges_list, test_false_edges_list, DATASET_NAME, f"share_{model_name}")
         
-        test_aps.append(test_ap)
-        test_aucs.append(test_auc)
 
-        if(LEAVE_INTRA_CLUSTERS):
+        pos_edges = []
+        neg_edges = []
+        for clust in range(len(features_)):
+            # take the edges starting from clust (and ending in any node, also the clust itself)
+            # since when testing we ignore the edges among the same cluster
+            tmp_test = test_matrix[clust_to_node[clust], :]
+            tmp_test, _, _ = sparse_to_tuple(tmp_test)
 
-            clust_idxs = []
-            for i in range(adj_train.shape[0]):
-                clust = node_to_clust[i]
-                clust_nodes = clust_to_node[clust]
+            for edge in range(tmp_test.shape[0]):
+                # idx of the destination in the complete graph
+                to_idx_comp = tmp_test[edge][1] 
+                # idx of the destination in its clust
+                to_idx_clust = clust_idxs[to_idx_comp]
+                # clust of the destination node
+                to_clust = node_to_clust[to_idx_comp]
 
-                clust_idx = clust_nodes.index(i)
-                clust_idxs.append(clust_idx)
+                if(to_clust != clust):
+                    pos_edges.append([tmp_test[edge][0], to_idx_clust, clust, to_clust])
+
+
+            tmp_test_false = test_false_matrix[clust_to_node[clust], :]
+            tmp_test_false, _, _ = sparse_to_tuple(tmp_test_false)
+
+            for edge in range(tmp_test_false.shape[0]):
+                # idx of the destination in the complete graph
+                to_idx_comp = tmp_test_false[edge][1] 
+                # idx of the destination in its clust
+                to_idx_clust = clust_idxs[to_idx_comp]
+                # clust of the destination node
+                to_clust = node_to_clust[to_idx_comp]
+
+                if(to_clust != clust):
+                    neg_edges.append([tmp_test_false[edge][0], to_idx_clust, clust, to_clust])
+
+        pos_edges = np.array(pos_edges)
+        neg_edges = np.array(neg_edges)
+
+        print("pos_edges", pos_edges.shape)
+
+        test_ap, test_auc, cms_between = test_in_between_edges(features_, model, pos_edges, neg_edges, DATASET_NAME, model_name, between_cluster_fc=between_cluster_fc)
+
+        test_between_cluster_aps.append(test_ap)
+        test_between_cluster_aucs.append(test_auc)
+
+        model_name += "_all_test"
+        
+        print("before for")
+
+        ts = [0.5, 0.6, 0.7]
+        for t in range(len(cms_inside)):
+            print("inside for")
             
-            
-
-            pos_edges = []
-            neg_edges = []
-            for clust in range(len(features_)):
-                # take the edges starting from clust (and ending in any node, also the clust itself)
-                # since when testing we ignore the edges among the same cluster
-                tmp_test = test_matrix[clust_to_node[clust], :]
-                tmp_test, _, _ = sparse_to_tuple(tmp_test)
-
-                for edge in range(tmp_test.shape[0]):
-                    # idx of the destination in the complete graph
-                    to_idx_comp = tmp_test[edge][1] 
-                    # idx of the destination in its clust
-                    to_idx_clust = clust_idxs[to_idx_comp]
-                    # clust of the destination node
-                    to_clust = node_to_clust[to_idx_comp]
-
-                    if(to_clust != clust):
-                        pos_edges.append([tmp_test[edge][0], to_idx_clust, clust, to_clust])
-
-
-                tmp_test_false = test_false_matrix[clust_to_node[clust], :]
-                tmp_test_false, _, _ = sparse_to_tuple(tmp_test_false)
-
-                for edge in range(tmp_test_false.shape[0]):
-                    # idx of the destination in the complete graph
-                    to_idx_comp = tmp_test_false[edge][1] 
-                    # idx of the destination in its clust
-                    to_idx_clust = clust_idxs[to_idx_comp]
-                    # clust of the destination node
-                    to_clust = node_to_clust[to_idx_comp]
-
-                    if(to_clust != clust):
-                        neg_edges.append([tmp_test_false[edge][0], to_idx_clust, clust, to_clust])
-
-            pos_edges = np.array(pos_edges)
-            neg_edges = np.array(neg_edges)
-
-            print("pos_edges", pos_edges.shape)
-
-            test_ap, test_auc, cms_between = test_in_between_edges(features_, model, pos_edges, neg_edges, DATASET_NAME, "share_first" if share_first else "share_last")
-
-            test_intra_cluster_aps.append(test_ap)
-            test_intra_cluster_aucs.append(test_auc)
-
-            model_name = "share_first" if share_first else "share_last"
-            model_name += "_all_test"
-            
-            print("before for")
-
-            ts = [0.5, 0.6, 0.7]
-            for t in range(len(cms_inside)):
-                print("inside for")
-                
-                cm = cms_inside[t] + cms_between[t]
-                df_cm = pd.DataFrame(cm, index = [i for i in "01"],
-                    columns = [i for i in "01"])
-                plt.figure(figsize = (10,7))
-                sn.heatmap(df_cm, annot=True, fmt='g')
-                plt.xlabel("predicted labels")
-                plt.ylabel("true labels")
-                plt.savefig(f"plots/conf_matrix_{DATASET_NAME}_{model_name}_{ts[t]}.png")
-                plt.close()
+            cm = cms_inside[t] + cms_between[t]
+            df_cm = pd.DataFrame(cm, index = [i for i in "01"],
+                columns = [i for i in "01"])
+            plt.figure(figsize = (10,7))
+            sn.heatmap(df_cm, annot=True, fmt='g')
+            plt.xlabel("predicted labels")
+            plt.ylabel("true labels")
+            plt.savefig(f"plots/conf_matrix_{DATASET_NAME}_{model_name}_{ts[t]}.png")
+            plt.close()
 
 
     print(f"test ap: {test_aps}")
     print(f"test auc: {test_aucs}")
-    print(f"test_intra_cluster_aps: {test_intra_cluster_aps}")
-    print(f"test_intra_cluster_aucs: {test_intra_cluster_aucs}")
+    print(f"test_between_cluster_aps: {test_between_cluster_aps}")
+    print(f"test_between_cluster_aucs: {test_between_cluster_aucs}")
     print()
     print(f"n_test_edges: {n_test_edges}")
     print(f"n_valid_edges: {n_valid_edges}")
