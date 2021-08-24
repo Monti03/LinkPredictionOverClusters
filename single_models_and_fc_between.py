@@ -1012,12 +1012,12 @@ if __name__ == "__main__":
             plt.savefig(f"plots/conf_matrix_{DATASET_NAME}_{model_name}_{ts[t]}.png")
             plt.close()
 
-        with open("results/{DATASET_NAME}_{model_name}.txt", "a") as fout:
+        with open(f"results/{DATASET_NAME}_{model_name}.txt", "a") as fout:
             fout.write(f"precs: {precs}\n")
             fout.write(f"recs: {recs}\n")
             fout.write(f"f1s: {f1s}\n")
             fout.write(f"times: {execution_times[-1]}\n")
-            fout.write("-"*10)
+            fout.write("-"*10 + "\n")
 
 
     print(f"test ap: {test_aps}")

@@ -102,7 +102,7 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
             with tf.GradientTape() as tape:    
                 # forward pass
                 embs = model(feature_tensor, training=True)
-                print(f"forward pass: {i}, {min(len(train_edges), train_false_edges.shape[0])}")
+                #print(f"forward pass: {i}, {min(len(train_edges), train_false_edges.shape[0])}")
                 
                 tmp_train_edges = train_edges[i: i+batch_size]
                 tmp_from = tmp_train_edges[:,0]
@@ -939,12 +939,12 @@ if __name__ == "__main__":
             recs.append(tp/(tp+fn))
             f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1])) 
 
-        with open("results/{DATASET_NAME}_couple_for_diff_clusts_single_for_same_clust.txt", "a") as fout:
+        with open(f"results/{DATASET_NAME}_couple_for_diff_clusts_single_for_same_clust.txt", "a") as fout:
             fout.write(f"precs: {precs}\n")
             fout.write(f"recs: {recs}\n")
             fout.write(f"f1s: {f1s}\n")
             fout.write(f"time: {sum(execution_times_couple) + sum(execution_times_single)}\n")
-            fout.write("-"*10)
+            fout.write("-"*10 + "\n")
 
 
         f1s, precs, recs = [], [], []
@@ -954,12 +954,12 @@ if __name__ == "__main__":
             recs.append(tp/(tp+fn))
             f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1])) 
 
-        with open("results/{DATASET_NAME}_only_couples.txt", "a") as fout:
+        with open(f"results/{DATASET_NAME}_only_couples.txt", "a") as fout:
             fout.write(f"precs: {precs}\n")
             fout.write(f"recs: {recs}\n")
             fout.write(f"f1s: {f1s}\n")
             fout.write(f"time: {sum(execution_times_couple)}\n")
-            fout.write("-"*10)
+            fout.write("-"*10 + "\n")
 
 
         print(execution_times_couple)
