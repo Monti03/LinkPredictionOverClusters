@@ -8,7 +8,7 @@ DATASET_NAME = "fb"
 DROPOUT = 0.3
 BATCH_SIZE = 5_000
 # number of epochs
-EPOCHS = 10
+EPOCHS = 2
 
 # output size of the first conv layer
 CONV1_OUT_SIZE = 256 # pubmed -> 1024

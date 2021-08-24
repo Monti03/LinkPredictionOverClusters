@@ -906,18 +906,27 @@ if __name__ == "__main__":
     between_valid_edges, _, _ = sparse_to_tuple(between_valid_matrix)
     between_valid_false_edges, _, _ = sparse_to_tuple(valid_false_matrix)
 
+    model_name = ""
+    if USE_FCS:
+        model_name = "multiple_models_between_with_fc"
+    else:
+        model_name = "multiple_models_between_as_product"
 
     start_time = time.time()
     if USE_FCS:
         model, between_cluster_fc = train(features_, adj_train_list, adj_train_norm_list, train_edges_list, valid_edges_list, valid_false_edges_list, 
                     between_train_edges, between_valid_edges, between_valid_false_edges, adj_train, clust_to_node, com_idx_to_clust_idx, node_to_clust=node_to_clust)
+        #model.save_weights(f"weights/{model_name}")
+        #between_cluster_fc.save_weights(f"weights/{model_name}")
+
     else:
         model = train(features_, adj_train_list, adj_train_norm_list, train_edges_list, valid_edges_list, valid_false_edges_list, 
                     between_train_edges, between_valid_edges, between_valid_false_edges, adj_train, clust_to_node, com_idx_to_clust_idx, node_to_clust=node_to_clust)
-    
+        #model.save_weights(f"weights/{model_name}")
+        
+
     execution_times.append(time.time()-start_time)
 
-    model_name = "multiple_models_between_as_product"
 
     test_ap, test_auc, cms_inside = test(features_, model, test_edges_list, test_false_edges_list, DATASET_NAME, f"{model_name}")
     
@@ -933,8 +942,6 @@ if __name__ == "__main__":
 
             clust_idx = clust_nodes.index(i)
             clust_idxs.append(clust_idx)
-        
-        
 
         pos_edges = []
         neg_edges = []
@@ -985,10 +992,17 @@ if __name__ == "__main__":
         print("before for")
 
         ts = [0.5, 0.6, 0.7]
+        f1s, precs, recs = [], [], []
         for t in range(len(cms_inside)):
             print("inside for")
             
             cm = cms_inside[t] + cms_between[t]
+            
+            tp, fp, fn = cm[1][1], cm[0][1], cm[1][0]
+            precs.append(tp/(tp+fp))
+            recs.append(tp/(tp+fn))
+            f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1])) 
+
             df_cm = pd.DataFrame(cm, index = [i for i in "01"],
                 columns = [i for i in "01"])
             plt.figure(figsize = (10,7))
@@ -997,6 +1011,13 @@ if __name__ == "__main__":
             plt.ylabel("true labels")
             plt.savefig(f"plots/conf_matrix_{DATASET_NAME}_{model_name}_{ts[t]}.png")
             plt.close()
+
+        with open("results/{DATASET_NAME}_{model_name}.txt", "a") as fout:
+            fout.write(f"precs: {precs}\n")
+            fout.write(f"recs: {recs}\n")
+            fout.write(f"f1s: {f1s}\n")
+            fout.write(f"times: {execution_times[-1]}\n")
+            fout.write("-"*10)
 
 
     print(f"test ap: {test_aps}")

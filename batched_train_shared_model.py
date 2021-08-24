@@ -720,9 +720,24 @@ def complete_graph(node_to_clust):
     diff_clust_false_test = list(map(lambda x: not x, same_clust_false_test))
 
 
-    _, _ = complete_test(features, model, test_edges[same_clust_test], test_false_edges[same_clust_false_test], DATASET_NAME, clust+"_same_clust")
-    _, _ = complete_test(features, model, test_edges[diff_clust_test], test_false_edges[diff_clust_false_test], DATASET_NAME, clust+"_intra_clust")
-    test_ap, test_auc = complete_test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
+    _, _, _ = complete_test(features, model, test_edges[same_clust_test], test_false_edges[same_clust_false_test], DATASET_NAME, clust+"_same_clust")
+    _, _, _ = complete_test(features, model, test_edges[diff_clust_test], test_false_edges[diff_clust_false_test], DATASET_NAME, clust+"_intra_clust")
+    test_ap, test_auc, cms = complete_test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
+
+    f1s, precs, recs = [], [], []
+    for cm in cms:
+        tp, fp, fn = cm[1][1], cm[0][1], cm[1][0]
+        precs.append(tp/(tp+fp))
+        recs.append(tp/(tp+fn))
+        f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1])) 
+
+    with open("results/{DATASET_NAME}_complete_model.txt", "a") as fout:
+        fout.write(f"precs: {precs}\n")
+        fout.write(f"recs: {recs}\n")
+        fout.write(f"f1s: {f1s}\n")
+        fout.write(f"time: {execution_time}\n")
+        fout.write("-"*10)
+
 
     
     test_ones = [1]*test_false_edges.shape[0]
@@ -922,11 +937,19 @@ if __name__ == "__main__":
             
             print("before for")
 
+            f1s, precs, recs = [], [], []
+
             ts = [0.5, 0.6, 0.7]
             for t in range(len(cms_inside)):
                 print("inside for")
                 
                 cm = cms_inside[t] + cms_between[t]
+
+                tp, fp, fn = cm[1][1], cm[0][1], cm[1][0]
+                precs.append(tp/(tp+fp))
+                recs.append(tp/(tp+fn))
+                f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1]))
+
                 df_cm = pd.DataFrame(cm, index = [i for i in "01"],
                     columns = [i for i in "01"])
                 plt.figure(figsize = (10,7))
@@ -935,6 +958,13 @@ if __name__ == "__main__":
                 plt.ylabel("true labels")
                 plt.savefig(f"plots/conf_matrix_{DATASET_NAME}_{model_name}_{ts[t]}.png")
                 plt.close()
+            
+            with open("results/{DATASET_NAME}_{model_name}.txt", "a") as fout:
+                fout.write(f"precs: {precs}\n")
+                fout.write(f"recs: {recs}\n")
+                fout.write(f"f1s: {f1s}\n")
+                fout.write(f"times: {execution_times[-1]}")
+                fout.write("-"*10)
 
 
     print(f"test ap: {test_aps}")

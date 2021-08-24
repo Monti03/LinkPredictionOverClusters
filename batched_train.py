@@ -102,6 +102,7 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
             with tf.GradientTape() as tape:    
                 # forward pass
                 embs = model(feature_tensor, training=True)
+                print(f"forward pass: {i}, {min(len(train_edges), train_false_edges.shape[0])}")
                 
                 tmp_train_edges = train_edges[i: i+batch_size]
                 tmp_from = tmp_train_edges[:,0]
@@ -129,7 +130,7 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
 
                 # get loss
                 loss = topological_loss(tmp_train_y, train_pred, loss_weights)#total_loss(tmp_train_y, train_pred, logvar, mu, n_nodes, top_loss_norm)
-
+                print("calculated loss")
                 # get gradient from loss 
                 grad = tape.gradient(loss, model.trainable_variables)
 
@@ -242,10 +243,14 @@ def plot(train, valid, name, clust_id):
     plt.savefig(f"plots/{name}_{clust_id}.png")
 
 def plot_cf_matrix(labels, preds, name):
+    cms = []
     for t in [0.5, 0.6, 0.7]:
 
         plt.clf()
         cm = metrics.confusion_matrix(labels, np.where(preds > t, 1, 0))
+
+        cms.append(cm)
+
         df_cm = pd.DataFrame(cm, index = [i for i in "01"],
                     columns = [i for i in "01"])
         plt.figure(figsize = (10,7))
@@ -253,6 +258,8 @@ def plot_cf_matrix(labels, preds, name):
         plt.xlabel("predicted labels")
         plt.ylabel("true labels")
         plt.savefig(f"plots/conf_matrix_{name}_{t}.png")
+
+    return cms
 
 
 def get_scores(embs, edges_pos, edges_neg, dataset, clust):
@@ -292,14 +299,14 @@ def get_scores(embs, edges_pos, edges_neg, dataset, clust):
     roc_score = metrics.roc_auc_score(labels_all, preds_all)
     ap_score = metrics.average_precision_score(labels_all, preds_all)
 
-    plot_cf_matrix(labels_all, preds_all, f"{dataset}_{clust}")
+    cms = plot_cf_matrix(labels_all, preds_all, f"{dataset}_{clust}")
 
     print(f"roc_score: {roc_score}")
     print(f"ap_score: {ap_score}")
 
     roc_curve_plot(labels_all, preds_all, roc_score, dataset, clust)
 
-    return roc_score, ap_score
+    return roc_score, ap_score, cms
 
 def roc_curve_plot(testy, y_pred, roc_score, dataset, clust):
     
@@ -322,9 +329,9 @@ def test(features, model, test_p, test_n, dataset, clust):
 
     #pred = np.reshape(pred.numpy(), (n_nodes, n_nodes))
 
-    auc, ap = get_scores(embs, test_p, test_n, dataset, clust)
+    auc, ap, cms = get_scores(embs, test_p, test_n, dataset, clust)
 
-    return ap, auc
+    return ap, auc, cms
 
 def test_with_intra_edges_to_zero(features, models, test_ps, test_ns, dataset, model_name, test_p_intra, test_n_intra):
     
@@ -589,14 +596,14 @@ def couple_and_single_test(features, models, test_p, test_n, dataset, clust_to_n
         raise Exception("I couldnt test over the edges inside the same cluster")
 
     name = f"{dataset}_only_couples" if couple_models_condition else f"{dataset}_couple_for_diff_clusts_single_for_same_clust"
-    plot_cf_matrix(labels_all, preds_all, name)
+    cms = plot_cf_matrix(labels_all, preds_all, name)
 
     roc_score = metrics.roc_auc_score(labels_all, preds_all)
     ap_score = metrics.average_precision_score(labels_all, preds_all)
 
 
 
-    return roc_score, ap_score
+    return roc_score, ap_score, cms
     
 
 # compute Ã = D^{1/2}(A+I)D^{1/2}
@@ -884,7 +891,7 @@ def single_main(adjs, features_, tests, valids, clust_to_node, node_to_clust):
         
         model.save_weights(f"weights/{DATASET_NAME}_{clust}")
 
-        test_ap, test_auc = test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
+        test_ap, test_auc, cms = test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
         test_ps.append(test_edges)
         test_ns.append(test_false_edges)
 
@@ -920,18 +927,48 @@ if __name__ == "__main__":
         models_single, execution_times_single, test_p_single, test_n_single = single_main(adjs_single, features_single, tests_single, valids_single, clust_to_node_single, node_to_clust_single)
         print("train single end")
         
-        couple_and_single_test(features_couple, models_couple, test_p_couple, test_n_couple, DATASET_NAME, single_models=models_single, single_features=features_single, single_clust_to_node=clust_to_node_single, single_node_to_clust=node_to_clust_single)
+        _, _, cms_both = couple_and_single_test(features_couple, models_couple, test_p_couple, test_n_couple, DATASET_NAME, single_models=models_single, single_features=features_single, single_clust_to_node=clust_to_node_single, single_node_to_clust=node_to_clust_single)
         print("test both end")
-        couple_and_single_test(features_couple, models_couple, test_p_couple, test_n_couple, DATASET_NAME, clust_to_nodes = clust_to_node_couple)
+        _, _, cms_only_couples =couple_and_single_test(features_couple, models_couple, test_p_couple, test_n_couple, DATASET_NAME, clust_to_nodes = clust_to_node_couple)
         print("test only couples end")
         
+        f1s, precs, recs = [], [], []
+        for cm in cms_both:
+            tp, fp, fn = cm[1][1], cm[0][1], cm[1][0]
+            precs.append(tp/(tp+fp))
+            recs.append(tp/(tp+fn))
+            f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1])) 
+
+        with open("results/{DATASET_NAME}_couple_for_diff_clusts_single_for_same_clust.txt", "a") as fout:
+            fout.write(f"precs: {precs}\n")
+            fout.write(f"recs: {recs}\n")
+            fout.write(f"f1s: {f1s}\n")
+            fout.write(f"time: {sum(execution_times_couple) + sum(execution_times_single)}\n")
+            fout.write("-"*10)
+
+
+        f1s, precs, recs = [], [], []
+        for cm in cms_only_couples:
+            tp, fp, fn = cm[1][1], cm[0][1], cm[1][0]
+            precs.append(tp/(tp+fp))
+            recs.append(tp/(tp+fn))
+            f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1])) 
+
+        with open("results/{DATASET_NAME}_only_couples.txt", "a") as fout:
+            fout.write(f"precs: {precs}\n")
+            fout.write(f"recs: {recs}\n")
+            fout.write(f"f1s: {f1s}\n")
+            fout.write(f"time: {sum(execution_times_couple)}\n")
+            fout.write("-"*10)
+
+
         print(execution_times_couple)
         print(execution_times_single)
 
 
     elif COUPLES_TRAIN:
         models_couple, execution_times_couple, test_p_couple, test_n_couple = couple_main(adjs_couple, features_couple, tests_couple, valids_couple, clust_to_node_couple, node_to_clust_couple)
-        couple_and_single_test(features_couple, models_couple, test_p_couple, test_n_couple, DATASET_NAME, clust_to_node = clust_to_node_couple)
+        _, _, cms =couple_and_single_test(features_couple, models_couple, test_p_couple, test_n_couple, DATASET_NAME, clust_to_node = clust_to_node_couple)
         print(execution_times_couple)
     else:
         raise Exception("No modality selected")
