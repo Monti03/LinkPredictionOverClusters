@@ -2,13 +2,13 @@
 LR = 0.000_1 # pubmed ->0.001
 
 # dataset to be used
-DATASET_NAME = "fb"
+DATASET_NAME = "amazon_electronics_computers_random"
 
 # dropout rate
 DROPOUT = 0.3
 BATCH_SIZE = 5_000
 # number of epochs
-EPOCHS = 2
+EPOCHS = 5_000
 
 # output size of the first conv layer
 CONV1_OUT_SIZE = 256 # pubmed -> 1024
@@ -31,10 +31,12 @@ LEAVE_INTRA_CLUSTERS = True
 COUPLES_TRAIN = False
 MATRIX_OPERATIONS = False
 
-SINGLE_MODELS = False
+SINGLE_MODELS = True
 
 COUPLE_AND_SINGLE = True
 
 FC_OUTPUT_DIMENSION = 64
 
 USE_FCS = True
+
+N_CLUSTERS = 5

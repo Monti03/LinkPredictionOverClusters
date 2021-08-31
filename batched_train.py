@@ -130,7 +130,7 @@ def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_f
 
                 # get loss
                 loss = topological_loss(tmp_train_y, train_pred, loss_weights)#total_loss(tmp_train_y, train_pred, logvar, mu, n_nodes, top_loss_norm)
-                print("calculated loss")
+                #print("calculated loss")
                 # get gradient from loss 
                 grad = tape.gradient(loss, model.trainable_variables)
 
@@ -243,11 +243,33 @@ def plot(train, valid, name, clust_id):
     plt.savefig(f"plots/{name}_{clust_id}.png")
 
 def plot_cf_matrix(labels, preds, name):
+    to_remove_zero, to_remove_one = False, False
+
+    if 0 not in labels:
+        preds = np.append(preds, 0)
+        labels = np.append(labels, 0)
+        print(labels)
+        print(preds)
+        to_remove_zero = True
+    if 1 not in labels:
+        preds = np.append(preds, 1)
+        labels = np.append(labels, 1)
+        print(labels)
+        print(preds)
+        to_remove_one = True
+
     cms = []
     for t in [0.5, 0.6, 0.7]:
 
         plt.clf()
         cm = metrics.confusion_matrix(labels, np.where(preds > t, 1, 0))
+        print(cm)
+        if to_remove_one:
+            cm[1][1] = cm[1][1] - 1
+            assert cm[1][1] == 0 
+        if to_remove_zero:
+            cm[0][0] = cm[0][0] - 1
+            assert cm[0][0] == 0 
 
         cms.append(cm)
 
@@ -292,19 +314,28 @@ def get_scores(embs, edges_pos, edges_neg, dataset, clust):
             batch_logits = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
             valid_pred_n = tf.concat((valid_pred_n, batch_logits), -1)
 
-    preds_all = tf.sigmoid(tf.concat([valid_pred_p, valid_pred_n], 0)).numpy()
+    if valid_pred_p is not None and valid_pred_n is not None:
+        logits_all =  tf.concat([valid_pred_p, valid_pred_n], -1)
+    elif valid_pred_p is not None:
+        logits_all  = valid_pred_p
+    else:
+        logits_all = valid_pred_n
+
+    preds_all = tf.sigmoid(logits_all, 0).numpy()
 
     labels_all = np.hstack([np.ones(len(edges_pos)), np.zeros(len(edges_neg))])
 
-    roc_score = metrics.roc_auc_score(labels_all, preds_all)
-    ap_score = metrics.average_precision_score(labels_all, preds_all)
+    roc_score = 0
+    ap_score = 0
+    if 0 in labels_all and 1 in labels_all:
+        roc_score = metrics.roc_auc_score(labels_all, preds_all)
+        ap_score = metrics.average_precision_score(labels_all, preds_all)
+        print(f"roc_score: {roc_score}")
+        print(f"ap_score: {ap_score}")
 
+        roc_curve_plot(labels_all, preds_all, roc_score, dataset, clust)
+    
     cms = plot_cf_matrix(labels_all, preds_all, f"{dataset}_{clust}")
-
-    print(f"roc_score: {roc_score}")
-    print(f"ap_score: {ap_score}")
-
-    roc_curve_plot(labels_all, preds_all, roc_score, dataset, clust)
 
     return roc_score, ap_score, cms
 
@@ -403,7 +434,12 @@ def get_preds(embs, edges_pos, edges_neg, embs_1=None):
             batch_logits = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
             valid_pred_n = tf.concat((valid_pred_n, batch_logits), -1)
 
-    preds_all = tf.concat([valid_pred_p, valid_pred_n], 0)
+    if (valid_pred_p is not None and valid_pred_n is not None):
+        preds_all = tf.concat([valid_pred_p, valid_pred_n], 0)
+    elif(valid_pred_n is not None):
+        preds_all = valid_pred_n
+    else: 
+        preds_all = valid_pred_p
 
     labels_all = np.hstack([np.ones(len(edges_pos)), np.zeros(len(edges_neg))])
 
@@ -476,10 +512,11 @@ def single_cluster_test_couple_models(features_tensors, models, test_p, test_n, 
 def couple_test(features_tensors, models, test_p, test_n):
     counter = 0
 
+
     labels_all, preds_all = None, None
-    
-    for clust_1 in range(len(features_tensors)):
-        for clust_2 in range(clust_1+1, len(features_tensors)):
+
+    for clust_1 in range(N_CLUSTERS):
+        for clust_2 in range(clust_1+1, N_CLUSTERS):
             # get positive edges to predict
             test_p_1 = test_p[:,2] == clust_1
             test_p_2 = test_p[:,3] == clust_2
@@ -491,15 +528,16 @@ def couple_test(features_tensors, models, test_p, test_n):
             test_n_2 = test_n[:,3] == clust_2
             test_n_1_2 = test_n[test_n_1*test_n_2]
             test_n_1_2 = test_n_1_2[:, :2]
+        
 
             embs = models[counter](features_tensors[counter])
 
             preds, labels = get_preds(embs, test_p_1_2, test_n_1_2)
 
-            if(labels_all is None):
+            if(labels_all is None and preds is not None):
                 preds_all = preds
                 labels_all = labels
-            else:
+            elif preds is not None:
                 preds_all = tf.concat([preds_all, preds], 0)
                 labels_all = np.hstack([labels_all, labels])
 
@@ -507,6 +545,8 @@ def couple_test(features_tensors, models, test_p, test_n):
     return preds_all, labels_all
 
 def convert_edges_to_clust_idxs(edges, clust_to_node, node_to_clust):
+    if len(edges) == 0:
+        return np.array([])
     positive_edges = []
     clust_single_first = node_to_clust[edges[0][0]]
     
@@ -542,16 +582,20 @@ def couple_and_single_test(features, models, test_p, test_n, dataset, clust_to_n
     assert single_models_condition or couple_models_condition
      
     # predict edges between different clusters
+    print("different cluster prediction")
     preds_all, labels_all = couple_test(features_tensors, models, test_p, test_n)
 
     
     if(couple_models_condition):
+        print("same cluster prediction + couple models")
         preds, labels = single_cluster_test_couple_models(features_tensors, models, test_p, test_n, clust_to_nodes)
         
         preds_all = tf.concat([preds_all, preds], 0)
         labels_all = np.hstack([labels_all, labels])
 
     elif(single_models_condition):
+        print("same cluster prediction + single models")
+
         # test the edges inside a cluster with a model trained only for that cluster
         
         single_features = [convert_sparse_matrix_to_sparse_tensor(single_features[i]) for i in range(len(single_features))]
@@ -586,12 +630,8 @@ def couple_and_single_test(features, models, test_p, test_n, dataset, clust_to_n
 
             preds, labels = get_preds(embs, test_p_clust, test_n_clust)
 
-            if(labels_all is None):
-                preds_all = preds
-                labels_all = labels
-            else:
-                preds_all = tf.concat([preds_all, preds], 0)
-                labels_all = np.hstack([labels_all, labels])
+            preds_all = tf.concat([preds_all, preds], 0)
+            labels_all = np.hstack([labels_all, labels])
     else:
         raise Exception("I couldnt test over the edges inside the same cluster")
 

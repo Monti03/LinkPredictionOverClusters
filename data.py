@@ -1,3 +1,4 @@
+from constants import N_CLUSTERS
 import sqlite3
 import numpy as np
 import random 
@@ -89,8 +90,12 @@ def load_data(dataset_name, get_couples = False):
         return load_cora_data()
     elif(dataset_name == "pubmed" or dataset_name == "pubmed_leave_intra_clust"):
         return load_pubmed_data(get_couples = get_couples)
+    elif(dataset_name == "pubmed_random"):
+        return load_pubmed_data(random=True, get_couples = get_couples)
     elif dataset_name == "amazon_electronics_computers":
         return load_amazon_electronics_computers_data(get_couples = get_couples)
+    elif dataset_name == "amazon_electronics_computers_random":
+        return load_amazon_electronics_computers_data(random=True, get_couples = get_couples)
     elif dataset_name == "amazon_electronics_photo":
         return load_amazon_electronics_computers_data(is_photos=True, get_couples = get_couples)
     elif dataset_name == "fb":
@@ -107,9 +112,10 @@ def load_edges(file_name):
     return edges.astype(np.int)
     
 
-def load_pubmed_data(sparsest_cut = False, get_couples = False):
+def load_pubmed_data(random = False, sparsest_cut = False, get_couples = False):
     folder = "pubmed" if sparsest_cut == False else "pubmed_sparsest_cut"
     data = sio.loadmat(f'data/{folder}/pubmed.mat')
+
     adj_complete = data['W'].toarray()
     all_features = data['fea']
     
@@ -132,7 +138,10 @@ def load_pubmed_data(sparsest_cut = False, get_couples = False):
     com_idx_to_clust_idx = {}
     node_to_clust = {}
     clust_to_node = {}
-    with open(f"data/{folder}/labels_pubmed.csv", "r") as fin:
+
+    labels_folder = folder if not random else f"{folder}_random"
+
+    with open(f"data/{labels_folder}/{N_CLUSTERS}/labels_pubmed.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             if(clust_to_node.get(clust) == None):
@@ -296,9 +305,9 @@ def get_complete_cora_data():
     return adj_complete, all_features, test_matrix, valid_matrix 
 
 
-def get_complete_pubmed_data(sparsest_cut = False, leave_intra_clust_edges = False):
+def get_complete_pubmed_data(random = False, sparsest_cut = False, leave_intra_clust_edges = False):
     folder = "pubmed" if sparsest_cut == False else "pubmed_sparsest_cut"
-    
+    print(f"random: {random}")
     data = sio.loadmat(f'data/{folder}/pubmed.mat')
     adj_complete = data['W'].toarray()
 
@@ -310,8 +319,10 @@ def get_complete_pubmed_data(sparsest_cut = False, leave_intra_clust_edges = Fal
     
     valid_edges = load_edges(f"data/{folder}/train_edges.csv")
     
+    labels_folder = folder if not random else f"{folder}_random"
+
     node_to_clust = {}
-    with open(f"data/{folder}/labels_pubmed.csv", "r") as fin:
+    with open(f"data/{labels_folder}/{N_CLUSTERS}/labels_pubmed.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             node_to_clust[i] = clust
@@ -340,10 +351,14 @@ def get_complete_pubmed_data(sparsest_cut = False, leave_intra_clust_edges = Fal
 def get_complete_data(dataset_name, leave_intra_clust_edges=False):
     if dataset_name == "pubmed":
         return get_complete_pubmed_data(leave_intra_clust_edges=leave_intra_clust_edges)
+    elif dataset_name == "pubmed_random":
+        return get_complete_pubmed_data(random=True, leave_intra_clust_edges=leave_intra_clust_edges)
     elif dataset_name == "cora":
         return get_complete_cora_data()
     elif dataset_name == "amazon_electronics_computers":
         return get_complete_amazon_electronics_computers_data(leave_intra_clust_edges=leave_intra_clust_edges)
+    elif dataset_name == "amazon_electronics_computers_random":
+        return get_complete_amazon_electronics_computers_data(random=True, leave_intra_clust_edges=leave_intra_clust_edges)
     elif dataset_name == "amazon_electronics_photo":
         return get_complete_amazon_electronics_computers_data(is_photos=True, leave_intra_clust_edges=leave_intra_clust_edges)
     elif dataset_name == "fb":
@@ -354,10 +369,9 @@ def get_complete_data(dataset_name, leave_intra_clust_edges=False):
 
 # is_photos = True: use photos dataset data
 # else use the computer one
-def get_complete_amazon_electronics_computers_data(is_photos = False, leave_intra_clust_edges = False):
+def get_complete_amazon_electronics_computers_data(random=False, is_photos = False, leave_intra_clust_edges = False):
     
     path = "amazon_electronics_photo" if is_photos else "amazon_electronics_computers"
-    number_of_clusters = 2 if is_photos else 3
 
     data = np.load(f"data/{path}/{path}.npz")
     data = from_flat_dict(data)
@@ -378,7 +392,8 @@ def get_complete_amazon_electronics_computers_data(is_photos = False, leave_intr
 
     print("computing node to clust")
     node_to_clust = {}
-    with open(f"data/{path}/{number_of_clusters}/labels_{path}.npz.csv", "r") as fin:
+    labels_folder = path if not random else f"{path}_random"
+    with open(f"data/{labels_folder}/{N_CLUSTERS}/labels_{path}.npz.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             node_to_clust[i] = clust
@@ -404,10 +419,9 @@ def get_complete_amazon_electronics_computers_data(is_photos = False, leave_intr
 
     return adj_complete, all_features, test_matrix, valid_matrix
 
-def load_amazon_electronics_computers_data(is_photos = False, get_couples = False):
-
+def load_amazon_electronics_computers_data(random=False, is_photos = False, get_couples = False):
+    print(f"random: {random}")
     path = "amazon_electronics_photo" if is_photos else "amazon_electronics_computers"
-    number_of_clusters = 2 if is_photos else 3
 
     data = np.load(f"data/{path}/{path}.npz")
     data = from_flat_dict(data)
@@ -433,7 +447,10 @@ def load_amazon_electronics_computers_data(is_photos = False, get_couples = Fals
     com_idx_to_clust_idx = {}
     node_to_clust = {}
     clust_to_node = {}
-    with open(f"data/{path}/{number_of_clusters}/labels_{path}.npz.csv", "r") as fin:
+
+    labels_folder = path if not random else f"{path}_random"
+
+    with open(f"data/{labels_folder}/{N_CLUSTERS}/labels_{path}.npz.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             if(clust_to_node.get(clust) == None):
@@ -529,7 +546,7 @@ def get_complete_fb_data(leave_intra_clust_edges = False):
 
     print("computing node to clust")
     node_to_clust = {}
-    with open("data/fb/3/labels_fb.csv", "r") as fin:
+    with open(f"data/fb/{N_CLUSTERS}/labels_fb.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             node_to_clust[i] = clust
@@ -583,7 +600,7 @@ def load_fb_data(get_couples=False):
 
     node_to_clust = {}
     clust_to_node = {}
-    with open(f"data/fb/3/labels_fb.csv", "r") as fin:
+    with open(f"data/fb/{N_CLUSTERS}/labels_fb.csv", "r") as fin:
         for i, line in enumerate(fin):
             clust = int(line.strip())
             if(clust_to_node.get(clust) == None):

@@ -1,0 +1,12 @@
+clust_0, pubmed_random, 340
+clust_1, pubmed_random, 350
+clust_2, pubmed_random, 307
+clust_0, pubmed_random, 486
+clust_1, pubmed_random, 385
+clust_2, pubmed_random, 403
+clust_complete, pubmed_random, 293
+first, pubmed_random, 1473
+last, pubmed_random, 922
+multiple_models_between_as_product, pubmed_random, 1175
+multiple_models_between_as_product, pubmed_random, 893
+multiple_models_between_as_product, amazon_electronics_computers_random, 238

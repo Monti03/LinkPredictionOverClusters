@@ -400,9 +400,14 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
                     batch_logits = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
                     valid_pred_n = tf.concat((valid_pred_n, batch_logits), -1)
 
-        
-            valid_pred = tf.concat([valid_pred_p, valid_pred_n], 0)
-        
+            if valid_pred_n is not None and valid_pred_p is not None:
+                valid_pred = tf.concat([valid_pred_p, valid_pred_n], 0)
+            elif valid_pred_n is not None:
+                valid_pred = valid_pred_n
+            else:
+                valid_pred = valid_pred_p
+                
+
             valid_y = [1]*len(valid_edges[clust]) + [0]*len(valid_false_edges[clust])
             valid_y = tf.convert_to_tensor(valid_y, dtype=tf.float32)
 
@@ -597,10 +602,16 @@ def get_preds(embs, edges_pos, edges_neg, embs_1=None, cluster_1=None, cluster_2
             batch_logits = batch_logits
             valid_pred_n = tf.concat((valid_pred_n, batch_logits), -1)
 
-    preds_all = tf.concat([valid_pred_p, valid_pred_n], 0)
-
-    labels_all = np.hstack([np.ones(len(edges_pos)), np.zeros(len(edges_neg))])
-
+    if(valid_pred_p is not None and valid_pred_n is not None):
+        preds_all = tf.concat([valid_pred_p, valid_pred_n], 0)
+        labels_all = np.hstack([np.ones(len(edges_pos)), np.zeros(len(edges_neg))])
+    elif valid_pred_p is not None: 
+        preds_all = valid_pred_p
+        labels_all = np.ones(len(edges_pos))
+    else: 
+        preds_all = valid_pred_n
+        labels_all = np.ones(len(edges_neg))
+     
     return preds_all, labels_all
 
 def get_scores(labels_all, preds_all, dataset, clust):    
@@ -982,7 +993,10 @@ if __name__ == "__main__":
 
         print("pos_edges", pos_edges.shape)
 
-        test_ap, test_auc, cms_between = test_in_between_edges(features_, model, pos_edges, neg_edges, DATASET_NAME, model_name, between_cluster_fc=between_cluster_fc)
+        if USE_FCS:
+            test_ap, test_auc, cms_between = test_in_between_edges(features_, model, pos_edges, neg_edges, DATASET_NAME, model_name, between_cluster_fc=between_cluster_fc)
+        else:
+            test_ap, test_auc, cms_between = test_in_between_edges(features_, model, pos_edges, neg_edges, DATASET_NAME, model_name)
 
         test_between_cluster_aps.append(test_ap)
         test_between_cluster_aucs.append(test_auc)
