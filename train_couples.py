@@ -40,6 +40,151 @@ def convert_sparse_matrix_to_sparse_tensor(sparse_mx):
     return tf.cast(sparse_tensor, dtype=tf.float32)
 
 def train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust_id, node_to_clust=None):
+    if features.shape[0] <= BATCH_SIZE and MATRIX_OPERATIONS:
+        print("MATRIX TRAIN")
+        return matrix_train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust_id, node_to_clust)
+    else:
+        print(f"BATCHED TRAIN")
+        return batched_train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust_id, node_to_clust)
+
+def matrix_train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust_id, node_to_clust=None):
+    train_accs, train_losses = [], []
+
+    valid_accs, valid_losses = [], [] 
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=LR)
+    
+    n_nodes = adj_train.shape[0]
+
+    # convert the normalized adj and the features to tensors
+    adj_train_norm_tensor = convert_sparse_matrix_to_sparse_tensor(adj_train_norm)
+    feature_tensor = convert_sparse_matrix_to_sparse_tensor(features)
+
+    # get train ground truth 
+    train_y = np.reshape(adj_train.toarray(), (n_nodes*n_nodes))
+    train_y = tf.convert_to_tensor(train_y, dtype=tf.float32)
+
+    # define the model
+    model = MyModel(adj_train_norm_tensor)
+
+    # initialize the patience
+    patience = 0
+    
+    train_false_edges = get_false_edges(adj_train, len(train_edges), node_to_clust=node_to_clust)
+
+    valid_edges_indeces = [x[0]*n_nodes + x[1] for x in valid_edges]
+    valid_false_edges_indeces = [x[0]*n_nodes + x[1] for x in valid_false_edges]
+
+
+    print(f"valid_edges_indeces: {len(valid_edges_indeces)}")
+    print(f"valid_false_edges_indeces: {len(valid_false_edges_indeces)}")
+
+
+    print("train_false_edges", train_false_edges.shape[0])
+    print("train_pos_edges", len(train_edges))
+    train_y_pos_edges = tf.convert_to_tensor([1.0]*len(train_edges))
+    train_y_neg_edges = tf.convert_to_tensor([0.0]*train_false_edges.shape[0])
+
+    tmp_train_y = tf.concat([train_y_pos_edges, train_y_neg_edges], 0)
+
+    for epoch in range(EPOCHS):
+        n_epochs = epoch
+        print(f"epoch: {epoch}, clust: {clust_id}")
+
+        epoch_losses = []
+        epoch_accs = []
+            
+        with tf.GradientTape() as tape:    
+            # forward pass
+            embs = model(feature_tensor, training=True)
+            #print(f"forward pass: {i}, {min(len(train_edges), train_false_edges.shape[0])}")
+            
+            complete_graph_preds = tf.matmul(embs, embs, transpose_b=True)
+            train_pos_pred = tf.gather_nd(complete_graph_preds, train_edges)
+            train_neg_pred = tf.gather_nd(complete_graph_preds, train_false_edges)
+    
+            train_pred = tf.concat((train_pos_pred, train_neg_pred), 0)
+            tmp_train_y = tf.concat([tf.ones(train_pos_pred.shape[0]),tf.zeros(train_neg_pred.shape[0])], 0)
+            
+            # get loss
+            loss = topological_loss(tmp_train_y, train_pred)
+
+            # get gradient from loss 
+            grad = tape.gradient(loss, model.trainable_variables)
+
+            # get acc
+            ta = tf.keras.metrics.Accuracy()
+            ta.update_state(tmp_train_y, tf.round(tf.nn.sigmoid(train_pred)))
+            train_acc = ta.result().numpy()
+
+            # optimize the weights
+            optimizer.apply_gradients(zip(grad, model.trainable_variables))
+
+            epoch_losses.append(loss.numpy())
+            epoch_accs.append(train_acc)
+
+        train_losses.append(sum(epoch_losses)/len(epoch_losses))
+        train_accs.append(sum(epoch_accs)/len(epoch_accs))
+        print(f"train_loss: {train_losses[-1]}")
+        print(f"train_acc: {train_accs[-1]}")
+
+        # save memory
+        grad = None
+        train_pred = None
+
+        embs = model(feature_tensor, training=False)
+        complete_graph_preds = tf.matmul(embs, embs, transpose_b=True)
+        
+        valid_pred_p = tf.gather_nd(complete_graph_preds, valid_edges)
+        valid_pred_n = tf.gather_nd(complete_graph_preds, valid_false_edges)
+        
+        print("len(valid_edges)", len(valid_edges))
+        valid_pred = tf.concat([valid_pred_p, valid_pred_n], 0)
+        
+        valid_y = [1]*len(valid_edges) + [0]*len(valid_false_edges)
+        valid_y = tf.convert_to_tensor(valid_y, dtype=tf.float32)
+
+        valid_loss = topological_loss(valid_y, valid_pred)
+
+        va = tf.keras.metrics.Accuracy()
+        va.update_state(valid_y, tf.round(tf.nn.sigmoid(valid_pred)))
+        valid_acc = va.result().numpy()
+
+        print(f"valid_loss: {valid_loss.numpy()}")
+        print(f"valid_acc: {valid_acc}")
+        print(f"valid_losses_len: {len(valid_losses)}")
+        print(f"patience: {patience}")
+        
+        valid_loss_np = valid_loss.numpy()
+
+        if(len(valid_losses) > 0 and min(valid_losses) < valid_loss_np):
+            print("increase patience")
+            print(min(valid_losses), valid_loss_np)
+            patience += 1
+        else:
+            print("zero patience")
+            if(len(valid_losses)>0):
+                print(min(valid_losses), valid_loss_np)
+            patience = 0
+        print(patience)
+        valid_losses.append(valid_loss.numpy())
+        valid_accs.append(valid_acc)
+        
+        if(patience > PATIENCE):
+            print("breaking")
+            break
+        print("#"*20)
+
+    plot(train_losses, valid_losses, "loss", clust_id)
+    plot(train_accs, valid_accs, "acc", clust_id)
+
+    with open("plots/n_epochs.txt", "a") as fout:
+        fout.write(f"clust_{clust_id}, {DATASET_NAME}, {n_epochs}\n")
+
+    return model
+
+
+def batched_train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust_id, node_to_clust=None):
     train_accs, train_losses = [], []
 
     valid_accs, valid_losses = [], [] 

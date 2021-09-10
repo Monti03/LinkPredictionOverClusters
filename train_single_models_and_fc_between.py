@@ -20,6 +20,7 @@ import seaborn as sn
 import networkx as nx
 import pandas as pd
 import numpy as np
+from seaborn.distributions import ecdfplot
 
 import tensorflow as tf
 
@@ -91,24 +92,402 @@ def comp_idxs_to_clusts_idxs(edges, node_to_clust, clust_to_node, com_idx_to_clu
     return converted_edges
 
 def train_preds(embs_from, embs_to, tmp_train_edges, between_cluster_fc=None, cluster_1=None, cluster_2=None):
-    # get the train edges of this batch
-    tmp_from = tmp_train_edges[:,0]
-    tmp_to = tmp_train_edges[:,1]
-
-    # gather the embeddings of the nodes relative to the trained edges
-    embs_from_ = tf.gather(embs_from, tmp_from)
-    embs_to_ = tf.gather(embs_to, tmp_to)
-
     # obtain the logits by a scalar product of the embs of the two nodes of the corresponding edge
     if(USE_FCS):
         assert between_cluster_fc is not None and cluster_1 is not None and cluster_2 is not None
-        train_pos_pred = between_cluster_fc(embs_from_, embs_to_,cluster_1, cluster_2)
+        train_pos_pred = between_cluster_fc(embs_from, embs_to,tmp_train_edges, cluster_1, cluster_2)
     else:
+        # get the train edges of this batch
+        tmp_from = tmp_train_edges[:,0]
+        tmp_to = tmp_train_edges[:,1]
+
+        # gather the embeddings of the nodes relative to the trained edges
+        embs_from_ = tf.gather(embs_from, tmp_from)
+        embs_to_ = tf.gather(embs_to, tmp_to)
         train_pos_pred = tf.linalg.diag_part(tf.matmul(embs_from_, embs_to_, transpose_b=True))
     
     return train_pos_pred
 
 def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid_edges, valid_false_edges, between_train_edges, between_valid_edges, between_valid_false_edges, complete_adj, clust_to_node, com_idx_to_clust_idx, node_to_clust=None):
+    n_nodes = [cluster.shape[0] for cluster in features_list]
+    print(n_nodes)
+    condition = MATRIX_OPERATIONS
+    for clust_1 in n_nodes:
+        for clust_2 in n_nodes:
+            condition = condition and (clust_1 * clust_2 <= BATCH_SIZE * BATCH_SIZE)
+            print(condition)
+            if not condition:
+                print(clust_1, clust_2, clust_2*clust_1)
+
+    if condition:
+        print("MATRIX TRAIN")
+        return matrix_train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid_edges, valid_false_edges, between_train_edges, between_valid_edges, between_valid_false_edges, complete_adj, clust_to_node, com_idx_to_clust_idx, node_to_clust)
+    else:
+        print("BATCHED TRAIN")
+        return batched_train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid_edges, valid_false_edges, between_train_edges, between_valid_edges, between_valid_false_edges, complete_adj, clust_to_node, com_idx_to_clust_idx, node_to_clust)
+
+
+def matrix_train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid_edges, valid_false_edges, between_train_edges, between_valid_edges, between_valid_false_edges, complete_adj, clust_to_node, com_idx_to_clust_idx, node_to_clust=None):
+    train_accs = []
+    train_losses = []
+
+    valid_accs = []
+    valid_losses = []
+    
+    patience = 0
+
+    n_clusters = len(features_list)
+
+    assert n_clusters == len(adj_train_list) and n_clusters == len(adj_train_norm_list)
+    assert n_clusters == len(train_edges) and n_clusters == len(valid_edges) and n_clusters == len(valid_false_edges)
+
+    # define the optimizer
+    optimizer = tf.keras.optimizers.Adam(learning_rate=LR)
+    
+    # get the number of nodes per cluster
+    n_nodes = [adj_train.shape[0] for adj_train in adj_train_list]
+
+    # convert the normalized adj and the features to tensors
+    adj_train_norm_tensor = [convert_sparse_matrix_to_sparse_tensor(adj_train_norm) for adj_train_norm in adj_train_norm_list]
+    feature_tensor = [convert_sparse_matrix_to_sparse_tensor(features) for features in features_list]
+
+    model = MultipleModels(adj_train_norm_tensor)
+    
+    if(USE_FCS):
+        between_cluster_fc = BetweenClusterFC(len(adj_train_list))
+
+    # flatten the matrix edges
+    #valid_edges_indeces = [[x[0]*n_nodes[cluster] + x[1] for x in valid_edges[cluster]] for cluster in range(n_clusters)]
+    #valid_false_edges_indeces = [[x[0]*n_nodes[cluster] + x[1] for x in valid_false_edges[cluster]] for cluster in range(n_clusters)]
+
+    between_valid_edges = comp_idxs_to_clusts_idxs_multi_thread(between_valid_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
+    between_valid_false_edges = comp_idxs_to_clusts_idxs_multi_thread(between_valid_false_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
+    
+
+    #print(f"valid_edges_indeces: {[len(i) for i in valid_edges_indeces]}")
+    #print(f"valid_false_edges_indeces: {[len(i) for i in valid_false_edges_indeces]}")
+
+    # get random false edges to train
+    train_false_edges = [get_false_edges(adj_train_list[cluster], len(train_edges[cluster]), node_to_clust=node_to_clust) for cluster in range(n_clusters)]
+    between_train_false_edges = get_false_edges(complete_adj, between_train_edges.shape[0], node_to_clust=None)
+
+    between_train_false_edges = comp_idxs_to_clusts_idxs_multi_thread(between_train_false_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
+    between_train_edges = comp_idxs_to_clusts_idxs_multi_thread(between_train_edges, node_to_clust, clust_to_node, com_idx_to_clust_idx)
+
+
+    print("train_false_edges", [clust_false_edges.shape[0] for clust_false_edges in train_false_edges])
+    print("train_pos_edges", [len(edges) for edges in train_edges])
+
+    n_epochs = 0
+    for epoch in range(EPOCHS):
+        n_epochs = epoch
+        epoch_losses = []
+        epoch_accs = []
+
+
+        train_pred, tmp_train_y  = None, None
+        clusts_loss = [] 
+
+        with tf.GradientTape() as tape:  
+            
+            embs_list = []
+
+            for clust in range(n_clusters):
+                
+                # get the train edges
+                clust_train_edges = train_edges[clust]
+                clust_train_false_edges = train_false_edges[clust]
+                print("predicting")
+                # forward pass -> obtain the embeddings of the nodes
+                embs = model(feature_tensor[clust], cluster=clust, training=True)
+                
+                complete_graph_preds = tf.matmul(embs, embs, transpose_b=True)
+                train_pos_pred = tf.gather_nd(complete_graph_preds, clust_train_edges[:, :2])
+                train_neg_pred = tf.gather_nd(complete_graph_preds, clust_train_false_edges[:, :2])
+
+                # save embs to use them in the prediction of the edges between the clusters
+                embs_list.append(embs)
+                
+                # concatenate the results
+                clust_train_pred = tf.concat((train_pos_pred, train_neg_pred), -1)
+                clust_tmp_train_y = tf.concat([tf.ones(train_pos_pred.shape[0]),tf.zeros(train_neg_pred.shape[0])], -1)
+
+                if train_pred is None:
+                    train_pred = clust_train_pred
+                    tmp_train_y = clust_tmp_train_y
+
+                else:
+                    train_pred = tf.concat((train_pred, clust_train_pred), -1)
+                    tmp_train_y = tf.concat((tmp_train_y, clust_tmp_train_y), -1)
+
+                # get loss
+                clust_loss = topological_loss(clust_tmp_train_y, clust_train_pred)
+                print(f"clust_loss {clust} : {clust_loss}")
+
+                clusts_loss.append(clust_loss)
+            
+                clust_loss = topological_loss(clust_tmp_train_y, clust_train_pred)
+
+            
+            for cluster_1 in range(n_clusters):
+                for cluster_2 in range(cluster_1+1, n_clusters):
+                    # get the indices of the edges starting from clust1 and ending in clust2
+                    tmp_train_edges_1 = between_train_edges[:,2]==cluster_1
+                    tmp_train_edges_2 = between_train_edges[:,3]==cluster_2
+                    tmp_train_edges_1_2 = tmp_train_edges_1 * tmp_train_edges_2
+
+                    # get the right edges from clust1 to clust2
+                    tmp_train_edges_1_2 = between_train_edges[tmp_train_edges_1_2]
+                    
+                    train_pos_pred = None
+                    if(tmp_train_edges_1_2.shape[0] > 0):
+
+                        # obtain the logits by a scalar product of the embs of the two nodes of the corresponding edge
+                        if(USE_FCS):
+                            train_pos_pred = between_cluster_fc(embs_list[cluster_1], embs_list[cluster_2], tmp_train_edges_1_2, cluster_1, cluster_2, matrix_opetaion=True)
+                        else:
+                            train_pos_pred = tf.gather_nd(tf.matmul(embs_list[cluster_1], embs_list[cluster_2], transpose_b=True), tmp_train_edges_1_2[:,:2])
+
+                    tmp_train_edges_1 = between_train_false_edges[:,2]==cluster_1
+                    tmp_train_edges_2 = between_train_false_edges[:,3]==cluster_2
+                    tmp_train_edges_1_2 = tmp_train_edges_1 * tmp_train_edges_2
+
+                    tmp_train_edges_1_2 = between_train_false_edges[tmp_train_edges_1_2]
+
+                    train_neg_pred = None
+                    if(tmp_train_edges_1_2.shape[0]>0):
+
+                        # obtain the logits by a scalar product of the embs of the two nodes of the corresponding edge
+                        if(USE_FCS):
+                            train_neg_pred = between_cluster_fc(embs_list[cluster_1], embs_list[cluster_2], tmp_train_edges_1_2, cluster_1, cluster_2, matrix_opetaion=True)                        
+                        else:
+                            train_neg_pred = tf.gather_nd(tf.matmul(embs_list[cluster_1], embs_list[cluster_2], transpose_b=True), tmp_train_edges_1_2[:,:2])
+                        
+
+                    clust_train_pred = None
+                    clust_tmp_train_y = None
+                    if(train_neg_pred is not None and train_pos_pred is not None):
+                        # concatenate the results
+                        clust_train_pred = tf.concat((train_pos_pred, train_neg_pred), -1)
+                        clust_tmp_train_y = tf.concat([tf.ones(train_pos_pred.shape[0]),tf.zeros(train_neg_pred.shape[0])], -1)
+
+                    elif(train_pos_pred is not None):
+                        clust_train_pred = train_pos_pred
+                        clust_tmp_train_y = tf.ones(train_pos_pred.shape[0])
+
+                    elif(train_neg_pred is not None):
+                        clust_train_pred = train_neg_pred
+                        clust_tmp_train_y = tf.ones(train_neg_pred.shape[0])
+                    else:
+                        continue
+
+                    if train_pred is None:
+                        train_pred = clust_train_pred
+                        tmp_train_y = clust_tmp_train_y
+
+                    else:
+                        train_pred = tf.concat((train_pred, clust_train_pred), -1)
+                        tmp_train_y = tf.concat((tmp_train_y, clust_tmp_train_y), -1)                
+
+            print("batch ground truth", tmp_train_y.shape)
+            print("batch prediction", train_pred.shape)
+            
+            loss = topological_loss(tmp_train_y, train_pred)
+            #loss = tf.reduce_mean(clusts_loss)
+            # get gradient from loss 
+            if(USE_FCS):
+                grad = tape.gradient(loss, model.trainable_variables + between_cluster_fc.trainable_variables)
+            else:
+                grad = tape.gradient(loss, model.trainable_variables)
+
+            # get acc
+            ta = tf.keras.metrics.Accuracy()
+            ta.update_state(tmp_train_y, tf.round(tf.nn.sigmoid(train_pred)))
+            train_acc = ta.result().numpy()
+        
+            print("batch train_acc:", train_acc)
+
+            # optimize the weights
+            if USE_FCS:
+                optimizer.apply_gradients(zip(grad, model.trainable_variables + between_cluster_fc.trainable_variables))
+            else:
+                optimizer.apply_gradients(zip(grad, model.trainable_variables))
+
+
+            epoch_losses.append(loss.numpy())
+            epoch_accs.append(train_acc)
+
+        train_losses.append(sum(epoch_losses)/len(epoch_losses))
+        train_accs.append(sum(epoch_accs)/len(epoch_accs))
+        print(f"\ntrain_loss: {train_losses[-1]}")
+        print(f"train_acc: {train_accs[-1]}")
+
+        # save memory
+        grad = None
+        train_pred = None
+
+        print("------------\nvalidation\n------------")
+
+        tot_valid_pred, tot_valid_y = None, None
+        clusts_loss = []
+        embs_list = []
+        for clust in range(n_clusters):
+
+            embs = model(feature_tensor[clust], cluster=clust,  training=False)
+            embs_list.append(embs)
+
+            complete_graph_preds = tf.matmul(embs, embs, transpose_b = True)
+            if len(valid_edges[clust]) > 0:
+                valid_pred_p = tf.gather_nd(complete_graph_preds, valid_edges[clust][:,:2])
+            else: 
+                valid_pred_p = None
+            
+            if len(valid_false_edges[clust]) > 0:
+                valid_pred_n = tf.gather_nd(complete_graph_preds, valid_false_edges[clust][:,:2])
+            else:
+                valid_pred_n = None
+
+            if valid_pred_n is not None and valid_pred_p is not None:
+                valid_pred = tf.concat([valid_pred_p, valid_pred_n], 0)
+            elif valid_pred_n is not None:
+                valid_pred = valid_pred_n
+            else:
+                valid_pred = valid_pred_p 
+
+            valid_y = [1]*len(valid_edges[clust]) + [0]*len(valid_false_edges[clust])
+            valid_y = tf.convert_to_tensor(valid_y, dtype=tf.float32)
+
+            clust_loss = topological_loss(valid_y, valid_pred)
+            clusts_loss.append(clust_loss)
+            
+            va = tf.keras.metrics.Accuracy()
+            va.update_state(valid_y, tf.round(tf.nn.sigmoid(valid_pred)))
+            clust_valid_acc = va.result().numpy()
+
+            print(f"clust_loss {clust} : {clust_loss}")
+            print(f"clust_acc {clust} : {clust_valid_acc}")
+
+            if tot_valid_pred is None:
+                tot_valid_pred = valid_pred
+                tot_valid_y = valid_y
+            else:
+                tot_valid_pred = tf.concat([tot_valid_pred, valid_pred], -1)
+                tot_valid_y = tf.concat([tot_valid_y, valid_y], -1)
+
+        # VALIDATION OF EDGES AMONG DIFFERENT CLUSTERS
+        print("----validation different clusters----")
+        for cluster_1 in range(n_clusters):
+            for cluster_2 in range(cluster_1+1, n_clusters):
+                embs_from, embs_to = embs_list[cluster_1], embs_list[cluster_2] 
+
+                tmp_valid_edges_1 = between_valid_edges[:,2]==cluster_1
+                tmp_valid_edges_2 = between_valid_edges[:,3]==cluster_2
+                tmp_valid_edges_1_2 = tmp_valid_edges_1 * tmp_valid_edges_2
+
+                # get the right edges from clust1 to clust2
+                tmp_valid_edges_1_2 = between_valid_edges[tmp_valid_edges_1_2]
+                
+                valid_pos_pred = None
+                if(tmp_valid_edges_1_2.shape[0] > 0):
+                    # obtain the logits by a scalar product of the embs of the two nodes of the corresponding edge
+                    if(USE_FCS):
+                        valid_pos_pred = between_cluster_fc(embs_list[cluster_1], embs_list[cluster_2], tmp_valid_edges_1_2, cluster_1, cluster_2, matrix_opetaion=True)
+                    else:
+                        valid_pos_pred = tf.gather_nd(tf.matmul(embs_list[cluster_1], embs_list[cluster_2], transpose_b=True), tmp_valid_edges_1_2[:,:2])
+
+                tmp_valid_edges_1 = between_valid_false_edges[:,2]==cluster_1
+                tmp_valid_edges_2 = between_valid_false_edges[:,3]==cluster_2
+                tmp_valid_edges_1_2 = tmp_valid_edges_1 * tmp_valid_edges_2
+
+                # get the right edges from clust1 to clust2
+                tmp_valid_edges_1_2 = between_valid_false_edges[tmp_valid_edges_1_2]
+                
+                valid_neg_pred = None
+                if(tmp_valid_edges_1_2.shape[0] > 0):
+                    # obtain the logits by a scalar product of the embs of the two nodes of the corresponding edge
+                    if(USE_FCS):
+                        valid_neg_pred = between_cluster_fc(embs_list[cluster_1], embs_list[cluster_2], tmp_valid_edges_1_2, cluster_1, cluster_2, matrix_opetaion=True)
+                    else:
+                        valid_neg_pred = tf.gather_nd(tf.matmul(embs_list[cluster_1], embs_list[cluster_2], transpose_b=True), tmp_valid_edges_1_2[:,:2])
+
+
+                clust_valid_pred = None
+                clust_tmp_valid_y = None
+                if(valid_neg_pred is not None and valid_pos_pred is not None):
+                    # concatenate the results
+                    clust_valid_pred = tf.concat((valid_pos_pred, valid_neg_pred), -1)
+                    clust_tmp_valid_y = tf.concat([tf.ones(valid_pos_pred.shape[0]),tf.zeros(valid_neg_pred.shape[0])], -1)
+
+                elif(valid_pos_pred is not None):
+                    clust_valid_pred = valid_pos_pred
+                    clust_tmp_valid_y = tf.ones(valid_pos_pred.shape[0])
+
+                elif(valid_neg_pred is not None):
+                    clust_valid_pred = valid_neg_pred
+                    clust_tmp_valid_y = tf.ones(valid_neg_pred.shape[0])
+                else:
+                    continue
+
+                if tot_valid_pred is None:
+                    tot_valid_pred = clust_valid_pred
+                    tot_valid_y = clust_tmp_valid_y
+
+                else:
+                    tot_valid_pred = tf.concat((tot_valid_pred, clust_valid_pred), -1)
+                    tot_valid_y = tf.concat((tot_valid_y, clust_tmp_valid_y), -1)
+
+        #loss_weights = tf.convert_to_tensor([[-0.1]*len(valid_edges[clust]) + [1]*len(valid_false_edges[clust])])
+
+        print("valid truth shape", tot_valid_y.shape)
+        print("valid pred shape", tot_valid_pred.shape)
+
+        #valid_loss = topological_loss(tot_valid_y, tot_valid_pred)
+        valid_loss = tf.reduce_mean(clusts_loss)
+
+        va = tf.keras.metrics.Accuracy()
+        va.update_state(tot_valid_y, tf.round(tf.nn.sigmoid(tot_valid_pred)))
+        valid_acc = va.result().numpy()
+
+        print(f"valid_loss: {valid_loss.numpy()}")
+        print(f"valid_acc: {valid_acc}")
+        print(f"valid_losses_len: {len(valid_losses)}")
+        print(f"patience: {patience}")
+        
+        valid_loss_np = valid_loss.numpy()
+
+        if(len(valid_losses) > 0 and min(valid_losses) < valid_loss_np):
+            print("increase patience")
+            print(min(valid_losses), valid_loss_np)
+            patience += 1
+        else:
+            print("zero patience")
+            if(len(valid_losses)>0):
+                print(min(valid_losses), valid_loss_np)
+            patience = 0
+        print(patience)
+        valid_losses.append(valid_loss.numpy())
+        valid_accs.append(valid_acc)
+        
+        if(patience > PATIENCE):
+            print("breaking")
+            break
+        print("#"*20)
+
+
+    model_name = "multiple_models_between_as_product"
+
+    plot(train_losses, valid_losses, "loss", f"shared_{model_name}")
+    plot(train_accs, valid_accs, "acc", f"shared_{model_name}")
+
+    with open("plots/n_epochs.txt", "a") as fout:
+        fout.write(f"{model_name}, {DATASET_NAME}, {n_epochs}\n")
+
+    if USE_FCS:
+        return model, between_cluster_fc
+    return model
+
+
+def batched_train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid_edges, valid_false_edges, between_train_edges, between_valid_edges, between_valid_false_edges, complete_adj, clust_to_node, com_idx_to_clust_idx, node_to_clust=None):
     train_accs = []
     train_losses = []
 
@@ -259,18 +638,17 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
                         
                         train_pos_pred = None
                         if(tmp_train_edges_1_2.shape[0] > 0):
-                            # get the train edges of this batch
-                            tmp_from = tmp_train_edges_1_2[:,0]
-                            tmp_to = tmp_train_edges_1_2[:,1]
-
-                            # gather the embeddings of the nodes relative to the trained edges
-                            embs_from_ = tf.gather(embs_list[cluster_1], tmp_from)
-                            embs_to_ = tf.gather(embs_list[cluster_2], tmp_to)
-
                             # obtain the logits by a scalar product of the embs of the two nodes of the corresponding edge
                             if(USE_FCS):
-                                train_pos_pred = between_cluster_fc(embs_from_, embs_to_, cluster_1, cluster_2)
+                                train_pos_pred = between_cluster_fc(embs_list[cluster_1], embs_list[cluster_2], tmp_train_edges_1_2, cluster_1, cluster_2)
                             else:
+                                # get the train edges of this batch
+                                tmp_from = tmp_train_edges_1_2[:,0]
+                                tmp_to = tmp_train_edges_1_2[:,1]
+
+                                # gather the embeddings of the nodes relative to the trained edges
+                                embs_from_ = tf.gather(embs_list[cluster_1], tmp_from)
+                                embs_to_ = tf.gather(embs_list[cluster_2], tmp_to)
                                 train_pos_pred = tf.linalg.diag_part(tf.matmul(embs_from_, embs_to_, transpose_b=True))
 
                         tmp_train_edges_1 = tmp_train_false_edges[:,2]==cluster_1
@@ -281,18 +659,17 @@ def train(features_list, adj_train_list, adj_train_norm_list, train_edges, valid
 
                         train_neg_pred = None
                         if(tmp_train_edges_1_2.shape[0]>0):
-                            # get the train edges of this batch
-                            tmp_from = tmp_train_edges_1_2[:,0]
-                            tmp_to = tmp_train_edges_1_2[:,1]
-
-                            # gather the embeddings of the nodes relative to the trained edges
-                            embs_from_ = tf.gather(embs_list[cluster_1], tmp_from)
-                            embs_to_ = tf.gather(embs_list[cluster_2], tmp_to)
-
                             # obtain the logits by a scalar product of the embs of the two nodes of the corresponding edge
                             if(USE_FCS):
-                                train_neg_pred = between_cluster_fc(embs_from_, embs_to_, cluster_1, cluster_2)
+                                train_neg_pred = between_cluster_fc(embs_list[cluster_1], embs_list[cluster_2], tmp_train_edges_1_2, cluster_1, cluster_2)
                             else:
+                                # get the train edges of this batch
+                                tmp_from = tmp_train_edges_1_2[:,0]
+                                tmp_to = tmp_train_edges_1_2[:,1]
+
+                                # gather the embeddings of the nodes relative to the trained edges
+                                embs_from_ = tf.gather(embs_list[cluster_1], tmp_from)
+                                embs_to_ = tf.gather(embs_list[cluster_2], tmp_to)
                                 train_neg_pred = tf.linalg.diag_part(tf.matmul(embs_from_, embs_to_, transpose_b=True))
                             
 
@@ -561,9 +938,10 @@ def get_preds(embs, edges_pos, edges_neg, embs_1=None, cluster_1=None, cluster_2
         if use_fcs_condition:
             assert cluster_1 is not None and cluster_2 is not None and between_cluster_fc is not None
             if cluster_2 > cluster_1:
-                batch_logits= between_cluster_fc(embs_from, embs_to, cluster_1, cluster_2)
+                batch_logits= between_cluster_fc(embs, embs_1, tmp_valid_edges, cluster_1, cluster_2)
             else:
-                batch_logits= between_cluster_fc(embs_to, embs_from, cluster_2, cluster_1)
+                tmp_valid_edges = np.flip(tmp_valid_edges[:,:2], axis=1) # exchange the first with the second column
+                batch_logits= between_cluster_fc(embs_1, embs, tmp_valid_edges, cluster_2, cluster_1)
 
         else:
             batch_logits=tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
@@ -585,9 +963,10 @@ def get_preds(embs, edges_pos, edges_neg, embs_1=None, cluster_1=None, cluster_2
         if use_fcs_condition:
             assert cluster_1 is not None and cluster_2 is not None and between_cluster_fc is not None
             if cluster_2 > cluster_1:
-                batch_logits= between_cluster_fc(embs_from, embs_to, cluster_1, cluster_2)
+                batch_logits= between_cluster_fc(embs, embs_1, tmp_valid_edges, cluster_1, cluster_2)
             else:
-                batch_logits= between_cluster_fc(embs_to, embs_from, cluster_2, cluster_1)
+                tmp_valid_edges = np.flip(tmp_valid_edges, axis=1)
+                batch_logits= between_cluster_fc(embs_1, embs, tmp_valid_edges, cluster_2, cluster_1)
 
         else:
             batch_logits=tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
