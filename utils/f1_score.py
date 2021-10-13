@@ -54,7 +54,8 @@ if __name__ == "__main__":
         "fc": "multiple_models_between_with_fc_all_test",
         "scalar product": "multiple_models_between_as_product_all_test",
         "share_first": "share_first_all_test",
-        "share_last": "share_last_all_test"
+        "share_last": "share_last_all_test",
+        "share_last_adv_loss" : "share_last_with_adversarial_loss_all_test"
     }
 
     model_names_keys = list(model_names.keys())

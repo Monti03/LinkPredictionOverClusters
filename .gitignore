@@ -7,3 +7,6 @@ logs
 data
 plots
 bar_plots
+only_same_clust_plots
+bar_plots_old
+bar_plots

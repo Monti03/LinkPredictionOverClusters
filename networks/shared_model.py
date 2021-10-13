@@ -3,6 +3,29 @@ from constants import *
 from networks.layers import *
 
 
+class LastSharedWithAdversarialLoss(tf.keras.Model):
+
+    def __init__(self, adj_norms):
+        super(LastSharedWithAdversarialLoss, self).__init__()        
+
+        # one convolutional layer per cluster
+        self.conv_1 = [GraphSparseConvolution(adj_norm=adj_norm, output_size=CONV1_OUT_SIZE, dropout_rate=DROPOUT, act=tf.nn.relu) for adj_norm in adj_norms]
+
+        self.conv_2 = GraphConvolutionSharingClusterWeights(adj_norms=adj_norms, output_size=CONV2_OUT_SIZE, dropout_rate=DROPOUT, act=lambda x: x)
+
+        self.fc = tf.keras.layers.Dense(N_CLUSTERS, activation=tf.nn.softmax)        
+
+    def call(self, inputs, cluster, training, predict_cluster = False):
+        # since the first convolutiona layer is not shared, I have to take the right one
+        x = self.conv_1[cluster](inputs, training)
+        
+        if predict_cluster:
+            return self.fc(x)
+
+        x = self.conv_2(x, cluster, training)
+
+        return x
+
 class LastShared(tf.keras.Model):
 
     def __init__(self, adj_norms):
