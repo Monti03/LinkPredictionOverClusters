@@ -49,13 +49,15 @@ if __name__ == "__main__":
 
     model_names = {
         "complete": "complete_model",
-        "couple_and_single":"couple_for_diff_clusts_single_for_same_clust",
-        "only_couples": "only_couples",
-        "fc": "multiple_models_between_with_fc_all_test",
-        "scalar product": "multiple_models_between_as_product_all_test",
-        "share_first": "share_first_all_test",
+        #"couple_and_single":"couple_for_diff_clusts_single_for_same_clust",
+        #"only_couples": "only_couples",
+        #"fc": "multiple_models_between_with_fc_all_test",
+        #"scalar product": "multiple_models_between_as_product_all_test",
+        #"share_first": "share_first_all_test",
         "share_last": "share_last_all_test",
-        "share_last_adv_loss" : "share_last_with_adversarial_loss_all_test"
+        "share_last_adv_loss_ohe" : "share_last_with_adversarial_loss_all_test",
+        "share_last_const_label" : "shared_with_all_labels_of_1"
+        
     }
 
     model_names_keys = list(model_names.keys())

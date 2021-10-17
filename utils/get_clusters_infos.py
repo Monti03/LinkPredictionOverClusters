@@ -47,7 +47,7 @@ if __name__ == "__main__":
         print("\n==============================")
         print(f"dataset: {dataset}")
         print()
-        train_matrix, _, test_matrix, valid_matrix = get_complete_data(dataset, leave_intra_clust_edges=True)
+        train_matrix, _, test_matrix, valid_matrix = get_complete_data(dataset, 3, leave_intra_clust_edges=True)
         
         print()
 

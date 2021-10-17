@@ -2,7 +2,7 @@
 LR = 0.000_1 
 
 # dataset to be used
-DATASET_NAME = "pubmed"
+DATASET_NAME = "amazon_electronics_computers"
 
 # dropout rate
 DROPOUT = 0.3
@@ -39,14 +39,19 @@ FC_OUTPUT_DIMENSION = 64
 
 USE_FCS = True
 
-N_CLUSTERS = 3
+N_CLUSTERS = 5
 
 
 # if true, than the adv loss is calculated considering 
 # as lable [1/N_CLUSTERS]*N_CLUSTERS in order to give to all the nodes
 # the same sort of class
-LABEL_OF_ALL_1 = False
+LABEL_OF_ALL_1 = True
+MSE_LOSS = False 
 
 TRAIN_ALSO_CLASSIFIER = False
 
-NUM_EPOCHS_ADV_LOSS = 7
+NUM_EPOCHS_ADV_LOSS = 5
+
+# if True the shared model with OHE adv loss updates the gradients
+# as if we are classifying. SHOULD STAY FALSE
+NON_NEG_GRAD = False

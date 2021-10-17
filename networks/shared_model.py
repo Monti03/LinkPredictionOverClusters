@@ -13,7 +13,8 @@ class LastSharedWithAdversarialLoss(tf.keras.Model):
 
         self.conv_2 = GraphConvolutionSharingClusterWeights(adj_norms=adj_norms, output_size=CONV2_OUT_SIZE, dropout_rate=DROPOUT, act=lambda x: x)
 
-        self.fc = tf.keras.layers.Dense(N_CLUSTERS, activation=tf.nn.softmax)        
+        n_clusters = len(adj_norms)
+        self.fc = tf.keras.layers.Dense(n_clusters, activation=tf.nn.softmax)        
 
     def call(self, inputs, cluster, training, predict_cluster = False):
         # since the first convolutiona layer is not shared, I have to take the right one

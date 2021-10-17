@@ -40,6 +40,36 @@ tf.random.set_seed(SEED)
 random.seed(SEED)
 np.random.RandomState(SEED)
 
+# Include standard modules
+import getopt, sys
+
+# Get full command-line arguments
+full_cmd_arguments = sys.argv
+
+argument_list = full_cmd_arguments[1:]
+
+print(argument_list)
+
+short_options = "d:c:"
+long_options = ["dataset=", "clusters=", "mse", "test", "nonneggrad", "fc", "constlabel"]
+try:
+    arguments, values = getopt.getopt(argument_list, short_options, long_options)
+except getopt.error as err:
+    # Output error, and return with an error code
+    print (str(err))
+    sys.exit(2)
+
+# Evaluate given options
+for current_argument, current_value in arguments:
+    if current_argument in ("-d", "--dataset"):
+        DATASET_NAME = current_value
+    elif current_argument in ("-c", "--clusters"):
+        N_CLUSTERS = current_value
+    elif current_argument in ("--fc"):
+        USE_FCS = True
+    elif current_argument in ("--test"):
+        EPOCHS = 5
+        print("Testing train: n epochs:", EPOCHS)
 
 # convert sparse matrix to sparse tensor
 def convert_sparse_matrix_to_sparse_tensor(sparse_mx):
@@ -1110,7 +1140,7 @@ def compute_adj_norm(adj):
 
 def complete_graph(node_to_clust):
     clust = "complete"
-    adj_train, features, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
+    adj_train, features, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, N_CLUSTERS, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
 
     train_edges, _, _ = sparse_to_tuple(adj_train)
     test_edges, _, _ = sparse_to_tuple(test_matrix)
@@ -1283,7 +1313,7 @@ if __name__ == "__main__":
         valid_false_edges_list.append(valid_false_edges)
 
     # train and test
-    adj_train, _, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
+    adj_train, _, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, N_CLUSTERS, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
 
     between_train_matrix = get_between_edges(adj_train, clust_to_node)
     between_valid_matrix = get_between_edges(valid_matrix, clust_to_node)

@@ -35,10 +35,42 @@ tf.random.set_seed(SEED)
 random.seed(SEED)
 np.random.RandomState(SEED)
 
+from utils.save_model import save_shared_model_embs as save_model
+
 from train_couples import train as complete_train
 from train_couples import test as complete_test
 
+# Include standard modules
+import getopt, sys
 
+# Get full command-line arguments
+full_cmd_arguments = sys.argv
+
+argument_list = full_cmd_arguments[1:]
+
+print(argument_list)
+
+short_options = "d:c:"
+long_options = ["dataset=", "clusters=", "mse", "test", "nonneggrad", "fc", "constlabel"]
+
+try:
+    arguments, values = getopt.getopt(argument_list, short_options, long_options)
+except getopt.error as err:
+    # Output error, and return with an error code
+    print (str(err))
+    sys.exit(2)
+
+# Evaluate given options
+for current_argument, current_value in arguments:
+    if current_argument in ("-d", "--dataset"):
+        DATASET_NAME = current_value
+    elif current_argument in ("-c", "--clusters"):
+        N_CLUSTERS = current_value
+    elif current_argument in ("--test"):
+        EPOCHS = 5
+        print("Testing train: n epochs:", EPOCHS)
+        
+        
 # convert sparse matrix to sparse tensor
 def convert_sparse_matrix_to_sparse_tensor(sparse_mx):
     if not sp.isspmatrix_coo(sparse_mx):
@@ -1007,6 +1039,14 @@ def test(features_list, model, test_p, test_n, dataset, clust):
 
     embs_list = [model(features[i], cluster=i, training=False) for i in range(len(features_list))]
 
+    first_layer_output = [model.conv_1[i](features[i]).numpy() for i in range(len(features_list))]
+
+    for clust in range(len(features_list)):
+        np.savetxt(f"first_layer_out/{len(features_list)}/{dataset}_shared_{len(features_list)}_{clust}.csv", first_layer_output[clust], delimiter=",")
+        check = np.loadtxt(f"first_layer_out/{len(features_list)}/{dataset}_shared_{len(features_list)}_{clust}.csv", delimiter=',')
+
+        print(np.sum(check - first_layer_output[clust]))
+
     labels_all, preds_all = None, None
 
     for i in range(len(features_list)):
@@ -1038,7 +1078,7 @@ def compute_adj_norm(adj):
 
 def complete_graph(node_to_clust):
     clust = "complete"
-    adj_train, features, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
+    adj_train, features, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, N_CLUSTERS, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
 
     train_edges, _, _ = sparse_to_tuple(adj_train)
     test_edges, _, _ = sparse_to_tuple(test_matrix)
@@ -1071,11 +1111,11 @@ def complete_graph(node_to_clust):
     start_time = time.time()
     
     # start training
-    model = complete_train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust, node_to_clust=node_to_clust)
+    #model = complete_train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust, node_to_clust=node_to_clust)
 
     execution_time = time.time() - start_time
 
-    model.save_weights(f"weights/{DATASET_NAME}_{clust}")
+    #model.save_weights(f"weights/{DATASET_NAME}_{clust}")
 
     test_ap, test_auc = 0, 0
 
@@ -1086,23 +1126,23 @@ def complete_graph(node_to_clust):
     diff_clust_false_test = list(map(lambda x: not x, same_clust_false_test))
 
 
-    _, _, _ = complete_test(features, model, test_edges[same_clust_test], test_false_edges[same_clust_false_test], DATASET_NAME, clust+"_same_clust")
-    _, _, _ = complete_test(features, model, test_edges[diff_clust_test], test_false_edges[diff_clust_false_test], DATASET_NAME, clust+"_intra_clust")
-    test_ap, test_auc, cms = complete_test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
+    #_, _, _ = complete_test(features, model, test_edges[same_clust_test], test_false_edges[same_clust_false_test], DATASET_NAME, clust+"_same_clust")
+    #_, _, _ = complete_test(features, model, test_edges[diff_clust_test], test_false_edges[diff_clust_false_test], DATASET_NAME, clust+"_intra_clust")
+    #test_ap, test_auc, cms = complete_test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
 
-    f1s, precs, recs = [], [], []
-    for cm in cms:
-        tp, fp, fn = cm[1][1], cm[0][1], cm[1][0]
-        precs.append(tp/(tp+fp))
-        recs.append(tp/(tp+fn))
-        f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1])) 
+    #f1s, precs, recs = [], [], []
+    #for cm in cms:
+    #tp, fp, fn = cm[1][1], cm[0][1], cm[1][0]
+    #precs.append(tp/(tp+fp))
+    #recs.append(tp/(tp+fn))
+    #f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1])) 
 
-    with open(f"results/{DATASET_NAME}_complete_model.txt", "a") as fout:
+    """with open(f"results/{DATASET_NAME}_complete_model.txt", "a") as fout:
         fout.write(f"precs: {precs}\n")
         fout.write(f"recs: {recs}\n")
         fout.write(f"f1s: {f1s}\n")
         fout.write(f"time: {execution_time}\n")
-        fout.write("-"*10 + "\n")
+        fout.write("-"*10 + "\n")"""
 
 
     
@@ -1216,9 +1256,9 @@ if __name__ == "__main__":
         test_false_edges_list.append(test_false_edges)
         valid_false_edges_list.append(valid_false_edges)
 
-    for share_first in [True, False]:
+    for share_first in [False]:
         
-        adj_train, _, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
+        adj_train, _, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, N_CLUSTERS, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
 
         intra_train_matrix = get_intra_edges(adj_train, clust_to_node)
         intra_valid_matrix = get_intra_edges(valid_matrix, clust_to_node)
@@ -1237,8 +1277,13 @@ if __name__ == "__main__":
 
         model_name = "first" if share_first else "last"
 
+        #model.save(f"weights/{DATASET_NAME}/{N_CLUSTERS}/share_{model_name}")
+
         test_ap, test_auc, cms_inside = test(features_, model, test_edges_list, test_false_edges_list, DATASET_NAME, f"share_{model_name}")
         
+        save_model(model, [convert_sparse_matrix_to_sparse_tensor(features) for features in features_], DATASET_NAME, f"share_{model_name}")
+
+
         test_aps.append(test_ap)
         test_aucs.append(test_auc)
 

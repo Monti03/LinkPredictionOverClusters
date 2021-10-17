@@ -21,6 +21,9 @@ from utils.data import load_data, get_test_edges, get_false_edges, sparse_to_tup
 from networks.gae_model import MyModel    
 from loss import total_loss, topological_loss
 
+from utils.save_model import save_gae_model_embs as save_model
+from utils.matrix_utils import *
+
 import time
 
 # set the seed
@@ -28,16 +31,57 @@ tf.random.set_seed(SEED)
 random.seed(SEED)
 np.random.RandomState(SEED)
 
+# Include standard modules
+import getopt, sys
 
-# convert sparse matrix to sparse tensor
-def convert_sparse_matrix_to_sparse_tensor(sparse_mx):
-    if not sp.isspmatrix_coo(sparse_mx):
-        sparse_mx = sparse_mx.tocoo()
-    indices_matrix = np.vstack((sparse_mx.row, sparse_mx.col)).transpose()
-    values = sparse_mx.data
-    shape = sparse_mx.shape
-    sparse_tensor = tf.SparseTensor(indices=indices_matrix, values=values, dense_shape=shape)
-    return tf.cast(sparse_tensor, dtype=tf.float32)
+# Get full command-line arguments
+full_cmd_arguments = sys.argv
+
+argument_list = full_cmd_arguments[1:]
+
+print(argument_list)
+
+short_options = "d:c:"
+long_options = ["dataset=", "clusters=", "mse", "test", "nonneggrad", "fc", "constlabel"]
+
+try:
+    arguments, values = getopt.getopt(argument_list, short_options, long_options)
+except getopt.error as err:
+    # Output error, and return with an error code
+    print (str(err))
+    sys.exit(2)
+
+# Evaluate given options
+for current_argument, current_value in arguments:
+    if current_argument in ("-d", "--dataset"):
+        DATASET_NAME = current_value
+        print("DATASET_NAME:", current_value)
+    
+    elif current_argument in ("-c", "--clusters"):
+        N_CLUSTERS = int(current_value)
+        print("Num Clusters:", N_CLUSTERS)
+    
+    elif current_argument in ("--constlabel"):
+        LABEL_OF_ALL_1 = True    
+        print("CONST LABEL:", True)
+    
+    elif current_argument in ("--mse"):
+        print("USING MSE LOSS WITH CONSTANT LABEL")
+        LABEL_OF_ALL_1, MSE_LOSS = True, True    
+        
+    elif current_argument in ("--test"):
+        EPOCHS = 5
+        print("Testing train: n epochs:", EPOCHS)
+    
+    elif current_argument in ("--nonneggrad"):
+        print("using non negative gradient")
+        NON_NEG_GRAD = True
+        LABEL_OF_ALL_1 = False    
+
+if LABEL_OF_ALL_1 and NON_NEG_GRAD:
+    raise Exception("ONLY ONE OF THE TWO CAN BE TRUE: LABEL_OF_ALL_1, NON_NEG_GRAD")
+
+print("MSE_LOSS", MSE_LOSS, "LABEL_OF_ALL_1", LABEL_OF_ALL_1)
 
 
 def batched_train(model, optimizer, feature_tensor, train_edges, train_false_edges, valid_edges, valid_false_edges, clust_id, classifier, node_to_clust=None, old_patience=0, last_loss=None):
@@ -200,7 +244,7 @@ def batched_train(model, optimizer, feature_tensor, train_edges, train_false_edg
             single_label = [1/N_CLUSTERS]*N_CLUSTERS 
         else:
             single_label = [0]*N_CLUSTERS 
-            single_label[clust_id] = 1   #BEFORE WAS NOT COMMENTED
+            single_label[clust_id] = 1  
         
         cluster_labels = [single_label] * n_nodes
         
@@ -218,14 +262,20 @@ def batched_train(model, optimizer, feature_tensor, train_edges, train_false_edg
             else:       
                 trainable_variables = model.trainable_variables
 
-            if LABEL_OF_ALL_1:
+            if MSE_LOSS:
                 loss = tf.keras.losses.MeanSquaredError()(cluster_labels, predicted_clusters) 
-                grad = tape.gradient(loss, model.trainable_variables)
-            else:
+                grad = tape.gradient(loss, trainable_variables)
+            elif LABEL_OF_ALL_1 and not MSE_LOSS:
                 loss = tf.keras.losses.CategoricalCrossentropy()(cluster_labels, predicted_clusters)
-                grad = tape.gradient(-loss, model.trainable_variables)
+                grad = tape.gradient(loss, trainable_variables)
+            elif NON_NEG_GRAD: 
+                loss = tf.keras.losses.CategoricalCrossentropy()(cluster_labels, predicted_clusters)
+                grad = tape.gradient(loss, trainable_variables)
+            else: 
+                loss = tf.keras.losses.CategoricalCrossentropy()(cluster_labels, predicted_clusters)
+                grad = tape.gradient(-loss, trainable_variables)
 
-            optimizer.apply_gradients(zip(grad, model.trainable_variables))
+            optimizer.apply_gradients(zip(grad, trainable_variables))
 
     return model, patience, min(valid_losses)
 
@@ -280,61 +330,6 @@ def plot_cf_matrix(labels, preds, name):
     return cms
 
 
-def get_scores(embs, edges_pos, edges_neg, dataset, clust):
-    
-    valid_pred_p=None
-    for i in range(0, len(edges_pos), BATCH_SIZE):
-        tmp_valid_edges = edges_pos[i: i+BATCH_SIZE]
-        tmp_from = tmp_valid_edges[:,0]
-        tmp_to = tmp_valid_edges[:,1]
-
-        embs_from = tf.gather(embs, tmp_from)
-        embs_to = tf.gather(embs, tmp_to)
-        if(valid_pred_p is None):
-            valid_pred_p = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
-        else:
-            batch_logits = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
-            valid_pred_p = tf.concat((valid_pred_p, batch_logits), -1)
-    
-    valid_pred_n = None
-    for i in range(0, len(edges_neg), BATCH_SIZE):
-        tmp_valid_edges = edges_neg[i: i+BATCH_SIZE]
-        tmp_from = tmp_valid_edges[:,0]
-        tmp_to = tmp_valid_edges[:,1]
-
-        embs_from = tf.gather(embs, tmp_from)
-        embs_to = tf.gather(embs, tmp_to)
-        if(valid_pred_n is None):
-            valid_pred_n = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
-        else:
-            batch_logits = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
-            valid_pred_n = tf.concat((valid_pred_n, batch_logits), -1)
-
-    if valid_pred_p is not None and valid_pred_n is not None:
-        logits_all =  tf.concat([valid_pred_p, valid_pred_n], -1)
-    elif valid_pred_p is not None:
-        logits_all  = valid_pred_p
-    else:
-        logits_all = valid_pred_n
-
-    preds_all = tf.sigmoid(logits_all, 0).numpy()
-
-    labels_all = np.hstack([np.ones(len(edges_pos)), np.zeros(len(edges_neg))])
-
-    roc_score = 0
-    ap_score = 0
-    if 0 in labels_all and 1 in labels_all:
-        roc_score = metrics.roc_auc_score(labels_all, preds_all)
-        ap_score = metrics.average_precision_score(labels_all, preds_all)
-        print(f"roc_score: {roc_score}")
-        print(f"ap_score: {ap_score}")
-
-        roc_curve_plot(labels_all, preds_all, roc_score, dataset, clust)
-    
-    cms = plot_cf_matrix(labels_all, preds_all, f"{dataset}_{clust}")
-
-    return roc_score, ap_score, cms
-
 def roc_curve_plot(testy, y_pred, roc_score, dataset, clust):
     
     lr_fpr, lr_tpr, _ = metrics.roc_curve(testy, y_pred)
@@ -348,315 +343,9 @@ def roc_curve_plot(testy, y_pred, roc_score, dataset, clust):
     plt.legend()
     plt.savefig(f"plots/roc_score_{dataset}_{clust}")
 
-def test(features, model, test_p, test_n, dataset, clust):
-    n_nodes = features.shape[0]
-    feature_tensor = convert_sparse_matrix_to_sparse_tensor(features)
 
-    embs = model(feature_tensor, training=False)
-
-    #pred = np.reshape(pred.numpy(), (n_nodes, n_nodes))
-
-    auc, ap, cms = get_scores(embs, test_p, test_n, dataset, clust)
-
-    return ap, auc, cms
-
-def test_with_intra_edges_to_zero(features, models, test_ps, test_ns, dataset, model_name, test_p_intra, test_n_intra):
-    
-    features = [convert_sparse_matrix_to_sparse_tensor(features[i]) for i in range(len(features))] 
-
-    labels_all, preds_all = None, None
-
-    for i in range(len(features)):
-        embs = models[i](features[i])
-        preds, labels = get_preds(embs, test_ps[i], test_ns[i])
-        if labels_all is None:
-            labels_all = labels
-            preds_all = preds
-        else:
-            preds_all = tf.concat((preds_all, preds), -1)
-            
-            labels_all = np.hstack([labels_all, labels])
-            
-    preds_all = tf.sigmoid(preds_all)
-    
-    preds_all = tf.concat((preds_all, [0]*test_p_intra, [0]*test_n_intra), -1)
-    labels_all = np.hstack([labels_all, [1]*test_p_intra, [0]*test_n_intra])
-
-    roc_score = metrics.roc_auc_score(labels_all, preds_all)
-    ap_score = metrics.average_precision_score(labels_all, preds_all)
-    
-    plot_cf_matrix(labels_all, preds_all, f"{dataset}_{model_name}")
-
-    print(f"roc_score: {roc_score}")
-    print(f"ap_score: {ap_score}")
-
-    roc_curve_plot(labels_all, preds_all, roc_score, dataset, model_name)
-
-    return roc_score, ap_score
-
-def get_preds(embs, edges_pos, edges_neg, embs_1=None):
-    
-    edges_pos = np.array(edges_pos)
-    edges_neg = np.array(edges_neg)
-
-
-    embs_1 = embs if embs_1 is None else embs_1
-
-    valid_pred_p=None
-    for i in range(0, len(edges_pos), BATCH_SIZE):
-        tmp_valid_edges = edges_pos[i: i+BATCH_SIZE]
-        tmp_from = tmp_valid_edges[:,0]
-        tmp_to = tmp_valid_edges[:,1]
-
-        embs_from = tf.gather(embs, tmp_from)
-        embs_to = tf.gather(embs_1, tmp_to)
-        if(valid_pred_p is None):
-            valid_pred_p = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
-        else:
-            batch_logits = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
-            valid_pred_p = tf.concat((valid_pred_p, batch_logits), -1)
-    
-    valid_pred_n = None
-    for i in range(0, len(edges_neg), BATCH_SIZE):
-        tmp_valid_edges = edges_neg[i: i+BATCH_SIZE]
-        tmp_from = tmp_valid_edges[:,0]
-        tmp_to = tmp_valid_edges[:,1]
-
-        embs_from = tf.gather(embs, tmp_from)
-        embs_to = tf.gather(embs_1, tmp_to)
-        if(valid_pred_n is None):
-            valid_pred_n = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
-        else:
-            batch_logits = tf.linalg.diag_part(tf.matmul(embs_from, embs_to, transpose_b=True))
-            valid_pred_n = tf.concat((valid_pred_n, batch_logits), -1)
-
-    if (valid_pred_p is not None and valid_pred_n is not None):
-        preds_all = tf.concat([valid_pred_p, valid_pred_n], 0)
-    elif(valid_pred_n is not None):
-        preds_all = valid_pred_n
-    else: 
-        preds_all = valid_pred_p
-
-    labels_all = np.hstack([np.ones(len(edges_pos)), np.zeros(len(edges_neg))])
-
-    return preds_all, labels_all
-
-def single_cluster_test_couple_models(features_tensors, models, test_p, test_n, clust_to_nodes):
-    # test the edges inside a cluster with all the models that consider that cluster
-    counter = 0 
-    clust_to_models = {}
-    
-    labels_all, preds_all = None, None
-
-    n_original_clusters = (1 + math.sqrt(1 + 8*(len(features_tensors))))/2
-    assert n_original_clusters == int(n_original_clusters)
-
-    for clust_1 in range(int(n_original_clusters)):
-        for clust_2 in range(clust_1+1, int(n_original_clusters)):
-            
-            if clust_1 not in clust_to_models:
-                clust_to_models[clust_1] = []
-            if clust_2 not in clust_to_models:
-                clust_to_models[clust_2] = []
-
-            clust_to_models[clust_1].append(counter)
-            clust_to_models[clust_2].append(counter)
-
-            counter += 1
-
-
-    for clust in range(int(n_original_clusters)):
-        # get positive edges to predict
-        test_p_1 = test_p[:,2] == clust
-        test_p_2 = test_p[:,3] == clust
-        test_p_1_2_comp = test_p[test_p_1*test_p_2]
-        
-
-        # get negative edges to predict
-        test_n_1 = test_n[:,2] == clust
-        test_n_2 = test_n[:,3] == clust
-        test_n_1_2 = test_n[test_n_1*test_n_2]
-        test_n_1_2_comp = test_n_1_2[:, :2]
-
-        preds, labels  = None, None
-
-        for idx in clust_to_models[clust]:
-            embs = models[idx](features_tensors[idx])
-            nodes = clust_to_nodes[idx]
-
-            test_p_1_2 = [[nodes.index(edge[0]), nodes.index(edge[1])] for edge in test_p_1_2_comp]
-            test_n_1_2 = [[nodes.index(edge[0]), nodes.index(edge[1])] for edge in test_n_1_2_comp]
-
-        
-            tmp_preds, tmp_labels = get_preds(embs, test_p_1_2, test_n_1_2)
-            
-            if(preds is None):
-                preds = tmp_preds
-                labels = tmp_labels
-            else:
-                preds += tmp_preds
-
-        preds = preds / len(clust_to_models[clust])
-        if(labels_all is None):
-            preds_all = preds
-            labels_all = labels
-        else:
-            preds_all = tf.concat([preds_all, preds], 0)
-            labels_all = np.hstack([labels_all, labels])
-    return preds_all, labels_all
-
-def couple_test(features_tensors, models, test_p, test_n):
-    counter = 0
-
-
-    labels_all, preds_all = None, None
-
-    for clust_1 in range(N_CLUSTERS):
-        for clust_2 in range(clust_1+1, N_CLUSTERS):
-            # get positive edges to predict
-            test_p_1 = test_p[:,2] == clust_1
-            test_p_2 = test_p[:,3] == clust_2
-            test_p_1_2 = test_p[test_p_1*test_p_2]
-            test_p_1_2 = test_p_1_2[:, :2]
-
-            # get negative edges to predict
-            test_n_1 = test_n[:,2] == clust_1
-            test_n_2 = test_n[:,3] == clust_2
-            test_n_1_2 = test_n[test_n_1*test_n_2]
-            test_n_1_2 = test_n_1_2[:, :2]
-        
-
-            embs = models[counter](features_tensors[counter])
-
-            preds, labels = get_preds(embs, test_p_1_2, test_n_1_2)
-
-            if(labels_all is None and preds is not None):
-                preds_all = preds
-                labels_all = labels
-            elif preds is not None:
-                preds_all = tf.concat([preds_all, preds], 0)
-                labels_all = np.hstack([labels_all, labels])
-
-            counter += 1
-    return preds_all, labels_all
-
-def convert_edges_to_clust_idxs(edges, clust_to_node, node_to_clust):
-    if len(edges) == 0:
-        return np.array([])
-    positive_edges = []
-    clust_single_first = node_to_clust[edges[0][0]]
-    
-    print("len:", len(clust_to_node[clust_single_first]))
-    
-    for edge in edges:
-        from_idx, to_idx = edge[0], edge[1] 
-        clust_single = node_to_clust[from_idx]
-        
-        assert clust_single == node_to_clust[to_idx] and clust_single_first == clust_single
-
-        from_idx_clust, to_idx_clust = clust_to_node[clust_single].index(from_idx), clust_to_node[clust_single].index(to_idx) 
-        positive_edges.append([from_idx_clust, to_idx_clust])
-    
-    return np.array(positive_edges)
-
-"""
-    test_p: [[idx_1, idx_2, clust_1, clust_2]]
-        in the case of test without single models, we have that idx_1 and idx_2 are the indeces of the nodes
-        inside the model trained over clust_1 clust_2
-
-        in the case of test with single models, we have that idx_1 and idx_2 are the indices of the nodes 
-        inside the model trained only over clust_1 = clust_2
-    
-    same for test_n
-"""
-def couple_and_single_test(features, models, test_p, test_n, dataset, clust_to_nodes = None, single_models = None, single_features = None, single_clust_to_node = None, single_node_to_clust = None):
-    features_tensors = [convert_sparse_matrix_to_sparse_tensor(features[i]) for i in range(len(features))] 
-
-    single_models_condition = single_models is not None and single_features is not None and single_clust_to_node is not None and single_node_to_clust is not None
-    couple_models_condition = clust_to_nodes is not None
-
-    assert single_models_condition or couple_models_condition
-     
-    # predict edges between different clusters
-    print("different cluster prediction")
-    preds_all, labels_all = couple_test(features_tensors, models, test_p, test_n)
-
-    
-    if(couple_models_condition):
-        print("same cluster prediction + couple models")
-        preds, labels = single_cluster_test_couple_models(features_tensors, models, test_p, test_n, clust_to_nodes)
-        
-        preds_all = tf.concat([preds_all, preds], 0)
-        labels_all = np.hstack([labels_all, labels])
-
-    elif(single_models_condition):
-        print("same cluster prediction + single models")
-
-        # test the edges inside a cluster with a model trained only for that cluster
-        
-        single_features = [convert_sparse_matrix_to_sparse_tensor(single_features[i]) for i in range(len(single_features))]
-        
-        for clust in range(len(single_models)):
-            # get positive edges to predict
-            test_p_1 = test_p[:,2] == clust
-            test_p_2 = test_p[:,3] == clust
-            test_p_1_2 = test_p[test_p_1*test_p_2]
-            test_p_1_2 = test_p_1_2[:, :2]
-
-            test_p_clust = convert_edges_to_clust_idxs(test_p_1_2, clust_to_node_single, node_to_clust_single)
-
-            # get negative edges to predict
-            test_n_1 = test_n[:,2] == clust
-            test_n_2 = test_n[:,3] == clust
-            test_n_1_2 = test_n[test_n_1*test_n_2]
-            test_n_1_2 = test_n_1_2[:, :2]
-
-            test_n_clust = convert_edges_to_clust_idxs(test_n_1_2, clust_to_node_single, node_to_clust_single)
-
-            # since the couples clust are sorted in descending order, I have to take the real value of clust
-            # for the single models
-
-            # I am sure that this is the clust that every node in test_p_clust and test_n_clust shares cause of an
-            # assert in the convert_edges_to_clust_idxs function
-            real_clust = node_to_clust_single[test_p_1_2[0][0]]
-
-            print("single_features[clust].shape[0]", single_features[real_clust].shape[0])
-
-            embs = single_models[real_clust](single_features[real_clust])
-
-            preds, labels = get_preds(embs, test_p_clust, test_n_clust)
-
-            preds_all = tf.concat([preds_all, preds], 0)
-            labels_all = np.hstack([labels_all, labels])
-    else:
-        raise Exception("I couldnt test over the edges inside the same cluster")
-
-    name = f"{dataset}_only_couples" if couple_models_condition else f"{dataset}_couple_for_diff_clusts_single_for_same_clust"
-    cms = plot_cf_matrix(labels_all, preds_all, name)
-
-    roc_score = metrics.roc_auc_score(labels_all, preds_all)
-    ap_score = metrics.average_precision_score(labels_all, preds_all)
-
-
-
-    return roc_score, ap_score, cms
-    
-
-# compute Ã = D^{1/2}(A+I)D^{1/2}
-def compute_adj_norm(adj):
-    
-    adj_I = adj + sp.eye(adj.shape[0])
-
-    D = np.sum(adj_I, axis=1)
-    D_power = sp.diags(np.asarray(np.power(D, -0.5)).reshape(-1))
-
-    adj_norm = D_power.dot(adj_I).dot(D_power)
-
-    return adj_norm
-
-def complete_graph(node_to_clust):
-    clust = "complete"
-    adj_train, features, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
+def get_false_test_valid_edges():
+    adj_train, _, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, N_CLUSTERS, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
 
     train_edges, _, _ = sparse_to_tuple(adj_train)
     test_edges, _, _ = sparse_to_tuple(test_matrix)
@@ -667,36 +356,15 @@ def complete_graph(node_to_clust):
 
     complete_adj = csr_matrix((data, (indexes[:,0], indexes[:,1])), shape = adj_train.shape)
 
-    node_to_clust_tmp = node_to_clust
-    if(LEAVE_INTRA_CLUSTERS):
-        # so the false edges that we will build are also between the clusters
-        node_to_clust_tmp = None
 
-    false_edges = get_false_edges(complete_adj, test_edges.shape[0] + valid_edges.shape[0], node_to_clust_tmp)
+    false_edges = get_false_edges(complete_adj, test_edges.shape[0] + valid_edges.shape[0])
 
     valid_false_edges = false_edges[:valid_edges.shape[0]]
     test_false_edges = false_edges[valid_edges.shape[0]:]
 
 
-    # since get_test_edges returns a triu, we sum to its transpose 
-    adj_train = adj_train + adj_train.T
-
-    # get normalized adj
-    adj_train_norm = compute_adj_norm(adj_train)
-    
     print(f"valid_edges: {valid_edges.shape[0]}")
     print(f"valid_false_edges: {valid_false_edges.shape[0]}")
-
-    test_ap, test_auc = 0,0
-    # start training
-    start_time = time.time()
-    #model = train(features, adj_train, adj_train_norm, train_edges, valid_edges, valid_false_edges, clust, node_to_clust=node_to_clust)
-    execution_time = time.time() - start_time
-    #model.save_weights(f"weights/{DATASET_NAME}_{clust}")
-
-    #test_ap, test_auc = test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
-    
-
 
     test_ones = [1]*test_false_edges.shape[0]
     valid_ones = [1]*valid_false_edges.shape[0]
@@ -704,7 +372,7 @@ def complete_graph(node_to_clust):
     test_false_matrix = csr_matrix((test_ones, (test_false_edges[:,0], test_false_edges[:,1])), adj_train.shape)
     valid_false_matrix = csr_matrix((valid_ones, (valid_false_edges[:,0], valid_false_edges[:,1])), adj_train.shape)
 
-    return test_false_matrix, valid_false_matrix, test_ap, test_auc, execution_time
+    return test_false_matrix, valid_false_matrix
 
 
 """
@@ -800,17 +468,15 @@ def initialize_train_data_and_model(features, adj_train, adj_train_norm, train_e
 
     return optimizer, model, train_false_edges, feature_tensor
 
-def single_main(adjs, features_, tests, valids, clust_to_node, node_to_clust):
+def main(adjs, features_, tests, valids, clust_to_node, node_to_clust):
 
-    test_false_matrix, valid_false_matrix, test_ap, test_auc, execution_time = complete_graph(None)
-    _, _, test_matrix_complete, _  = get_complete_data(DATASET_NAME, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
+    test_false_matrix, valid_false_matrix = get_false_test_valid_edges()
+    _, _, test_matrix_complete, _  = get_complete_data(DATASET_NAME, N_CLUSTERS, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
 
     n_test_edges = []
     n_valid_edges = []
 
-    test_aps = [test_ap]
-    test_aucs = [test_auc]
-    execution_times = [execution_time]
+    execution_times = []
 
     subset_lenghts = []
     
@@ -898,7 +564,7 @@ def single_main(adjs, features_, tests, valids, clust_to_node, node_to_clust):
     n_iterations = 0
     while sum(train_ended) < N_CLUSTERS:
         n_iterations += 1
-        if n_iterations > 10_000: 
+        if n_iterations > EPOCHS: 
             break
         for clust in range(N_CLUSTERS):
             train_edges = train_data[clust]["train_edges"]
@@ -961,7 +627,44 @@ def single_main(adjs, features_, tests, valids, clust_to_node, node_to_clust):
             elif nodes_from_to_false.shape[0] > 0:
                 test_false_edges = np.concatenate((test_false_edges, np.concatenate((nodes_from_to_false, clusters_false), 1)), 0)
     
-    test_adv_loss(models, test_edges, test_false_edges, feature_tensors)
+    model_name = "one_model_per_cluster"
+    if MSE_LOSS:
+        model_name += "_mse_loss"
+    elif LABEL_OF_ALL_1 and not MSE_LOSS:
+        model_name += "_const_labels_crossentropy_loss"
+    else: 
+        model_name += "_adv_loss_ohe"
+
+    cms = test_adv_loss(models, test_edges, test_false_edges, feature_tensors, model_name)
+
+    f1s, precs, recs = [], [], []
+
+    ts = [0.5, 0.6, 0.7]
+    for i in range(len(cms)):
+
+        cm = cms[i]
+
+        tp, fp, fn = cm[1][1], cm[0][1], cm[1][0]
+        precs.append(tp/(tp+fp))
+        recs.append(tp/(tp+fn))
+        f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1]))
+
+        df_cm = pd.DataFrame(cm, index = [i for i in "01"],
+            columns = [i for i in "01"])
+        plt.figure(figsize = (10,7))
+        sn.heatmap(df_cm, annot=True, fmt='g')
+        plt.xlabel("predicted labels")
+        plt.ylabel("true labels")
+        plt.savefig(f"plots/conf_matrix_{DATASET_NAME}_{model_name}_{ts[i]}.png")
+        plt.close()
+    
+    dataset_folder_name = DATASET_NAME if DATASET_NAME != "amazon_electronics_computers" else "amazon_computers"
+    with open(f"results/{dataset_folder_name}/{N_CLUSTERS}/{DATASET_NAME}_{model_name}.txt", "a") as fout:
+        fout.write(f"precs: {precs}\n")
+        fout.write(f"recs: {recs}\n")
+        fout.write(f"f1s: {f1s}\n")
+        fout.write(f"times: {sum(execution_times)}\n")
+        fout.write("-"*10 + "\n")
 
     print("---execution times---")
     print(execution_times)
@@ -970,7 +673,12 @@ def single_main(adjs, features_, tests, valids, clust_to_node, node_to_clust):
     test_edges : [node_from, node_to, clust_from, clust_to]
         where node_from and node_to are wrt the cluster
 """
-def test_adv_loss(models, test_edges, test_false_edges, feature_tensors):
+def test_adv_loss(models, test_edges, test_false_edges, feature_tensors, model_name):
+    
+    for i in range(len(models)):
+        save_model(models[i], feature_tensors[i], DATASET_NAME, f"{model_name}_{i}", len(models))
+
+
     embs = [models[clust](feature_tensors[clust]) for clust in range(N_CLUSTERS)]
 
     preds, true_values = None, None
@@ -1004,7 +712,7 @@ def test_adv_loss(models, test_edges, test_false_edges, feature_tensors):
             else:
                 preds, true_values = tmp_preds, tmp_true_values
 
-    cms = plot_cf_matrix(np.array(true_values), preds.numpy(), "one_model_per_cluster_adv_loss")
+    cms = plot_cf_matrix(np.array(true_values), preds.numpy(), model_name)
 
     for cm in cms: 
         tp, fp, fn = cm[1][1], cm[0][1], cm[1][0]
@@ -1017,15 +725,16 @@ def test_adv_loss(models, test_edges, test_false_edges, feature_tensors):
         print(f"f1: {f1}")
         print("--"*10)
     
+    return cms
 
 if __name__ == "__main__":
     
     # load data
-    single_data = load_data(DATASET_NAME, get_couples = False)
+    single_data = load_data(DATASET_NAME, N_CLUSTERS, get_couples = False)
 
     adjs_single, features_single, tests_single, valids_single, clust_to_node_single, node_to_clust_single, _ = single_data
 
-    single_main(adjs_single, features_single, tests_single, valids_single, clust_to_node_single, node_to_clust_single)
+    main(adjs_single, features_single, tests_single, valids_single, clust_to_node_single, node_to_clust_single)
 
     
 

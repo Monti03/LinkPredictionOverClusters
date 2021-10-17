@@ -30,6 +30,8 @@ from utils.data import load_data, get_test_edges, get_false_edges, sparse_to_tup
 from networks.shared_model import LastSharedWithAdversarialLoss    
 from loss import total_loss, topological_loss
 
+from utils.save_model import save_shared_model_embs as save_model
+
 # set the seed
 tf.random.set_seed(SEED)
 random.seed(SEED)
@@ -38,6 +40,58 @@ np.random.RandomState(SEED)
 from train_couples import train as complete_train
 from train_couples import test as complete_test
 
+
+# Include standard modules
+import getopt, sys
+
+# Get full command-line arguments
+full_cmd_arguments = sys.argv
+
+argument_list = full_cmd_arguments[1:]
+
+print(argument_list)
+
+short_options = "d:c:"
+long_options = ["dataset=", "clusters=", "mse", "test", "nonneggrad", "fc", "constlabel"]
+
+try:
+    arguments, values = getopt.getopt(argument_list, short_options, long_options)
+except getopt.error as err:
+    # Output error, and return with an error code
+    print (str(err))
+    sys.exit(2)
+
+# Evaluate given options
+for current_argument, current_value in arguments:
+    if current_argument in ("-d", "--dataset"):
+        DATASET_NAME = current_value
+        print("DATASET_NAME:", current_value)
+    
+    elif current_argument in ("-c", "--clusters"):
+        N_CLUSTERS = current_value
+        print("Num Clusters:", N_CLUSTERS)
+    
+    elif current_argument in ("--constlabel"):
+        LABEL_OF_ALL_1 = True    
+        print("CONST LABEL:", True)
+    
+    elif current_argument in ("--mse"):
+        print("USING MSE LOSS WITH CONSTANT LABEL")
+        LABEL_OF_ALL_1, MSE_LOSS = True, True    
+        
+    elif current_argument in ("--test"):
+        EPOCHS = 5
+        print("Testing train: n epochs:", EPOCHS)
+    
+    elif current_argument in ("--nonneggrad"):
+        print("using non negative gradient")
+        NON_NEG_GRAD = True
+        LABEL_OF_ALL_1 = False    
+
+if LABEL_OF_ALL_1 and NON_NEG_GRAD:
+    raise Exception("ONLY ONE OF THE TWO CAN BE TRUE: LABEL_OF_ALL_1, NON_NEG_GRAD")
+
+print("MSE_LOSS", MSE_LOSS, "LABEL_OF_ALL_1", LABEL_OF_ALL_1)
 
 # convert sparse matrix to sparse tensor
 def convert_sparse_matrix_to_sparse_tensor(sparse_mx):
@@ -323,8 +377,14 @@ def matrix_train(features_list, adj_train_list, adj_train_norm_list, train_edges
                 else: 
                     trainable_variables = model.conv_1.trainable_variables
                 
-                if LABEL_OF_ALL_1:
+                if MSE_LOSS:
                     loss = tf.keras.losses.MeanSquaredError()(cluster_labels, predicted_clusters) 
+                    grad = tape.gradient(loss, trainable_variables)
+                elif LABEL_OF_ALL_1 and not MSE_LOSS:
+                    loss = tf.keras.losses.CategoricalCrossentropy()(cluster_labels, predicted_clusters)
+                    grad = tape.gradient(loss, trainable_variables)
+                elif NON_NEG_GRAD: 
+                    loss = tf.keras.losses.CategoricalCrossentropy()(cluster_labels, predicted_clusters)
                     grad = tape.gradient(loss, trainable_variables)
                 else: 
                     loss = tf.keras.losses.CategoricalCrossentropy()(cluster_labels, predicted_clusters)
@@ -1089,6 +1149,26 @@ def test(features_list, model, test_p, test_n, dataset, clust):
     #n_nodes = features.shape[0]
     features = [convert_sparse_matrix_to_sparse_tensor(features) for features in features_list]
 
+    first_layer_output = [model.conv_1[i](features[i]).numpy() for i in range(len(features_list))]
+
+    for clust in range(len(features_list)):
+        
+        model_name = "shared_with_adversarial_loss" 
+        if MSE_LOSS:
+            model_name = "shared_with_MSE_loss"
+        elif LABEL_OF_ALL_1 and not MSE_LOSS:
+            model_name = "shared_with_all_labels_of_1"
+        elif NON_NEG_GRAD:
+            model_name = "shared_with_OHE_NON_NEG_GRAD"
+
+        model_name = model_name if not TRAIN_ALSO_CLASSIFIER else model_name + "_train_classifier" 
+
+        np.savetxt(f"first_layer_out/{dataset}_{model_name}_{len(features_list)}_{clust}.csv", first_layer_output[clust], delimiter=",")
+        check = np.loadtxt(f"first_layer_out/{dataset}_{model_name}_{len(features_list)}_{clust}.csv", delimiter=',')
+
+        print(np.sum(check - first_layer_output[clust]))
+
+
     embs_list = [model(features[i], cluster=i, training=False) for i in range(len(features_list))]
 
     labels_all, preds_all = None, None
@@ -1122,7 +1202,7 @@ def compute_adj_norm(adj):
 
 def complete_graph(node_to_clust):
     clust = "complete"
-    adj_train, features, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
+    adj_train, features, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, N_CLUSTERS, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
 
     train_edges, _, _ = sparse_to_tuple(adj_train)
     test_edges, _, _ = sparse_to_tuple(test_matrix)
@@ -1168,27 +1248,6 @@ def complete_graph(node_to_clust):
 
     diff_clust_test = list(map(lambda x: not x, same_clust_test))
     diff_clust_false_test = list(map(lambda x: not x, same_clust_false_test))
-
-
-    #_, _, _ = complete_test(features, model, test_edges[same_clust_test], test_false_edges[same_clust_false_test], DATASET_NAME, clust+"_same_clust")
-    #_, _, _ = complete_test(features, model, test_edges[diff_clust_test], test_false_edges[diff_clust_false_test], DATASET_NAME, clust+"_intra_clust")
-    #test_ap, test_auc, cms = complete_test(features, model, test_edges, test_false_edges, DATASET_NAME, clust)
-
-    """ f1s, precs, recs = [], [], []
-    for cm in cms:
-        tp, fp, fn = cm[1][1], cm[0][1], cm[1][0]
-        precs.append(tp/(tp+fp))
-        recs.append(tp/(tp+fn))
-        f1s.append(2*precs[-1]*recs[-1]/(precs[-1]+recs[-1])) 
-
-    with open(f"results/{DATASET_NAME}_complete_model.txt", "a") as fout:
-        fout.write(f"precs: {precs}\n")
-        fout.write(f"recs: {recs}\n")
-        fout.write(f"f1s: {f1s}\n")
-        fout.write(f"time: {execution_time}\n")
-        fout.write("-"*10 + "\n") """
-
-
     
     test_ones = [1]*test_false_edges.shape[0]
     valid_ones = [1]*valid_false_edges.shape[0]
@@ -1235,7 +1294,7 @@ def get_intra_edges(matrix, clust_to_node):
 if __name__ == "__main__":
     
     # load data : adj, features, node labels and number of clusters
-    adjs, features_, tests, valids, clust_to_node, node_to_clust, com_idx_to_clust_idx = load_data(DATASET_NAME)
+    adjs, features_, tests, valids, clust_to_node, node_to_clust, com_idx_to_clust_idx = load_data(DATASET_NAME, N_CLUSTERS)
 
     # turn the dictionary into a list of features
     features_ = [features_[i] for i in range(len(features_))]
@@ -1301,7 +1360,7 @@ if __name__ == "__main__":
         valid_false_edges_list.append(valid_false_edges)
 
         
-    adj_train, _, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
+    adj_train, _, test_matrix, valid_matrix  = get_complete_data(DATASET_NAME, N_CLUSTERS, leave_intra_clust_edges=LEAVE_INTRA_CLUSTERS)
 
     intra_train_matrix = get_intra_edges(adj_train, clust_to_node)
     intra_valid_matrix = get_intra_edges(valid_matrix, clust_to_node)
@@ -1318,9 +1377,19 @@ if __name__ == "__main__":
     
     execution_times.append(time.time()-start_time)
 
-    model_name = "last_with_adversarial_loss"
+    model_name = "shared_with_adversarial_loss" 
+    if MSE_LOSS:
+        model_name = "shared_with_MSE_loss"
+    elif LABEL_OF_ALL_1 and not MSE_LOSS:
+        model_name = "shared_with_all_labels_of_1"
+    elif NON_NEG_GRAD:
+        model_name = "shared_with_OHE_NON_NEG_GRAD"
+
+    model_name = model_name if not TRAIN_ALSO_CLASSIFIER else model_name + "_train_classifier" 
 
     test_ap, test_auc, cms_inside = test(features_, model, test_edges_list, test_false_edges_list, DATASET_NAME, f"share_{model_name}")
+
+    save_model(model, [convert_sparse_matrix_to_sparse_tensor(features) for features in features_], DATASET_NAME, model_name)
     
     test_aps.append(test_ap)
     test_aucs.append(test_auc)
@@ -1380,9 +1449,6 @@ if __name__ == "__main__":
 
         test_intra_cluster_aps.append(test_ap)
         test_intra_cluster_aucs.append(test_auc)
-
-        model_name = "share_last_with_adversarial_loss"
-        model_name += "_all_test"
         
         print("before for")
 
