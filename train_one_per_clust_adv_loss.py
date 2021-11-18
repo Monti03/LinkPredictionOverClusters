@@ -18,11 +18,11 @@ from tensorflow.python.ops.gen_linalg_ops import matrix_triangular_solve
 
 from constants import *
 from utils.data import load_data, get_test_edges, get_false_edges, sparse_to_tuple, get_complete_cora_data, get_complete_data
-from networks.gae_model import MyModel    
+from networks.gae_model import GAEModel    
 from loss import total_loss, topological_loss
 
 from utils.save_model import save_gae_model_embs as save_model
-from utils.matrix_utils import *
+from utils.utils import *
 
 import time
 
@@ -449,7 +449,7 @@ def initialize_train_data_and_model(features, adj_train, adj_train_norm, train_e
     train_y = tf.convert_to_tensor(train_y, dtype=tf.float32)
 
     # define the model
-    model = MyModel(adj_train_norm_tensor)
+    model = GAEModel(adj_train_norm_tensor)
     
     train_false_edges = get_false_edges(adj_train, len(train_edges))
 

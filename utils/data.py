@@ -307,7 +307,7 @@ def get_complete_cora_data():
     return adj_complete, all_features, test_matrix, valid_matrix 
 
 
-def get_complete_pubmed_data(n_clusters, random = False, sparsest_cut = False, leave_intra_clust_edges = False):
+def get_complete_pubmed_data(n_clusters, random = False, sparsest_cut = False, leave_intra_clust_edges = True):
     folder = "pubmed" if sparsest_cut == False else "pubmed_sparsest_cut"
     print(f"random: {random}")
     data = sio.loadmat(f'data/{folder}/pubmed.mat')

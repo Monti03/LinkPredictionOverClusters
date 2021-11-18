@@ -4,7 +4,7 @@ from constants import *
 
 # loss that considers the error reconstructing some edges
 def topological_loss(y_actual, y_pred, sample_weight=None):
-    return tf.keras.losses.BinaryCrossentropy(from_logits=True)(y_actual, y_pred, sample_weight=sample_weight)
+    return tf.keras.losses.BinaryCrossentropy(from_logits=True, reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE)(y_actual, y_pred, sample_weight=sample_weight)
 
    
 # get the total loss as topological loss - LK div

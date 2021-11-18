@@ -5,10 +5,10 @@ from networks.layers import *
 #import tensorflow_probability as tfp
 
 
-class MyModel(tf.keras.Model):
+class GAEModel(tf.keras.Model):
 
     def __init__(self, adj_norm_tensor):
-        super(MyModel, self).__init__()
+        super(GAEModel, self).__init__()
         self.adj = adj_norm_tensor
         
         # the first layer is a sparse conv layer since the input tensor is sparse

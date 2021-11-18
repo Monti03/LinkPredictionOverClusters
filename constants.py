@@ -2,7 +2,7 @@
 LR = 0.000_1 
 
 # dataset to be used
-DATASET_NAME = "amazon_electronics_computers"
+DATASET_NAME = "pubmed"
 
 # dropout rate
 DROPOUT = 0.3
@@ -39,7 +39,7 @@ FC_OUTPUT_DIMENSION = 64
 
 USE_FCS = True
 
-N_CLUSTERS = 5
+N_CLUSTERS = 3
 
 
 # if true, than the adv loss is calculated considering 
