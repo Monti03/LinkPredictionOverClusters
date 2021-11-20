@@ -2,7 +2,7 @@
 LR = 0.000_1 
 
 # dataset to be used
-DATASET_NAME = "pubmed"
+DATASET_NAME = "amazon_electronics_computers"
 
 # dropout rate
 DROPOUT = 0.3

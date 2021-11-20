@@ -80,3 +80,52 @@ def plot_cf_matrix(labels, preds, name, test=False):
             plt.savefig(f"plots/conf_matrix_{name}_{t}.png")
 
     return cms
+
+def batch_prediction(edges, embs_from, embs_to, predictions):
+    tmp_from = edges[:,0]
+    tmp_to = edges[:,1]
+
+    tmp_embs_from = tf.gather(embs_from, tmp_from)
+    tmp_embs_to = tf.gather(embs_to, tmp_to)
+
+    batch_logits = tf.linalg.diag_part(tf.matmul(tmp_embs_from, tmp_embs_to, transpose_b=True))
+    
+    if(predictions is None):
+        predictions = batch_logits
+    else:
+        predictions = tf.concat((predictions, batch_logits), -1)
+
+    return predictions
+
+def get_predictions(embs_from, edges, batch_size, embs_to=None):
+    if embs_to is None:
+        embs_to = embs_from
+
+    predictions = None
+
+    for i in range(0, edges.shape[0], batch_size):
+        tmp_edges = edges[i: i+batch_size]
+        predictions = batch_prediction(tmp_edges, embs_from, embs_to, predictions)
+    predictions = batch_prediction(edges[i+batch_size:], embs_from, embs_to, predictions)
+
+    return predictions
+
+def get_predictions_and_labels(embs_from, edges_pos, edges_neg, batch_size, embs_to=None):
+    
+    preds_pos = get_predictions(embs_from, edges_pos, batch_size, embs_to=embs_to)
+    preds_neg = get_predictions(embs_from, edges_neg, batch_size, embs_to=embs_to)
+
+    print(preds_pos.shape, edges_pos.shape)
+    print(preds_pos.shape, edges_neg.shape)
+
+
+    if (preds_pos is not None and preds_neg is not None):
+        preds_all = tf.concat([preds_pos, preds_neg], 0)
+    elif(preds_neg is not None):
+        preds_all = preds_neg
+    else: 
+        preds_all = preds_pos
+
+    labels_all = np.hstack([np.ones(len(edges_pos)), np.zeros(len(edges_neg))])
+
+    return preds_all, labels_all
