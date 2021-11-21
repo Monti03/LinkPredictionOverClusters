@@ -107,6 +107,10 @@ class SharedTrainerWithAdvLoss(SharedTrainer):
                 ith_label[i] = 1
             self.cluster_labels += [ith_label] * n_nodes[i]   
 
+        self.name = f"{self.dataset}_share_last_with_adv"
+        if self.adv_const_labesl:
+            self.name += "_const_labels"
+
     def __adv_backprop(self):
         with tf.GradientTape() as tape:  
             predicted_classes = []
